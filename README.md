@@ -1,5 +1,6 @@
 # service-bus-dotnet-messaging-performance
-This sample can be used to help benchmark Service Bus Premium Messaging, and can be used for performance best practices.
+This sample can be used to help benchmark Service Bus Premium Messaging, and can be used for performance best practices. Check out the related blog post for additional information - <https://blogs.msdn.microsoft.com/servicebus/2016/07/18/premium-messaging-how-fast-is-it/>
+
 ## Running this sample
 
 ### Prerequisites
