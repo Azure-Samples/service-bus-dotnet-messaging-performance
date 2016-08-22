@@ -15,9 +15,9 @@ namespace ServiceBusPerfSample
     using Microsoft.ServiceBus;
     using Microsoft.ServiceBus.Messaging;
 
-    abstract class PerformaceTask
+    abstract class PerformanceTask
     {
-        protected PerformaceTask(Settings settings, Metrics metrics, CancellationToken cancellationToken)
+        protected PerformanceTask(Settings settings, Metrics metrics, CancellationToken cancellationToken)
         {
             this.Settings = settings;
             this.Metrics = metrics;

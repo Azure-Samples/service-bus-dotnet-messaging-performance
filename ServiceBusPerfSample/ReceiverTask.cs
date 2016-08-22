@@ -17,7 +17,7 @@ namespace ServiceBusPerfSample
     using Microsoft.ServiceBus;
     using Microsoft.ServiceBus.Messaging;
 
-    sealed class ReceiverTask : PerformaceTask
+    sealed class ReceiverTask : PerformanceTask
     {
         readonly List<MessageReceiver> receivers;
 

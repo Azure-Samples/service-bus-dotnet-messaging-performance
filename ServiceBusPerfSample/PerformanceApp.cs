@@ -19,7 +19,7 @@ namespace ServiceBusPerfSample
         readonly Settings settings;
         readonly Metrics metrics;
         readonly CancellationTokenSource cancellationTokenSource;
-        readonly List<PerformaceTask> tasks;
+        readonly List<PerformanceTask> tasks;
 
         public PerformanceApp(Settings settings)
         {
@@ -27,7 +27,7 @@ namespace ServiceBusPerfSample
             this.settings = settings;
             this.metrics = new Metrics(settings);
             this.cancellationTokenSource = new CancellationTokenSource();
-            this.tasks = new List<PerformaceTask>();
+            this.tasks = new List<PerformanceTask>();
         }
 
         public async void Start()
