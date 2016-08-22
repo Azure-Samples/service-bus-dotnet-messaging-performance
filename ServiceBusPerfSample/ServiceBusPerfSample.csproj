@@ -84,7 +84,7 @@
     <Compile Include="Extensions.cs" />
     <Compile Include="MetricsData.cs" />
     <Compile Include="Metrics.cs" />
-    <Compile Include="PerformaceTask.cs" />
+    <Compile Include="PerformanceTask.cs" />
     <Compile Include="SenderTask.cs" />
     <Compile Include="ReceiverTask.cs" />
     <Compile Include="PerformanceApp.cs" />
