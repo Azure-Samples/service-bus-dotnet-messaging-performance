@@ -40,15 +40,15 @@ namespace ServiceBusPerfSample
                 switch (option.ToLowerInvariant())
                 {
                     case "1":
-                        settings = Settings.CreateQueueSettings(connectionString, TransportType.Amqp);
+                        settings = Settings.CreateQueueSettings(connectionString, TransportType.NetMessaging);
                         break;
 
                     case "2":
-                        settings = Settings.CreateTopicSettings(connectionString, 1, TransportType.Amqp);
+                        settings = Settings.CreateTopicSettings(connectionString, 1, TransportType.NetMessaging);
                         break;
 
                     case "3":
-                        settings = Settings.CreateTopicSettings(connectionString, 5, TransportType.Amqp);
+                        settings = Settings.CreateTopicSettings(connectionString, 5, TransportType.NetMessaging);
                         break;
 
                     case "x":
