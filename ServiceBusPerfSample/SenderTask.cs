@@ -56,7 +56,7 @@ namespace ServiceBusPerfSample
 
                 if (Settings.SendBatchCount <= 1)
                 {
-                    sender.SendAsync(new Message(payload)).ContinueWith(async (t) =>
+                    sender.SendAsync(new Message(payload) { TimeToLive = TimeSpan.FromMinutes(5) }).ContinueWith(async (t) =>
                     {
                         if (t.IsFaulted)
                         {
@@ -83,7 +83,7 @@ namespace ServiceBusPerfSample
                     List<Message> batch = new List<Message>();
                     for (int i = 0; i < Settings.SendBatchCount; i++)
                     {
-                        batch.Add(new Message(payload));
+                        batch.Add(new Message(payload) { TimeToLive = TimeSpan.FromMinutes(5) });
                     }
                     sender.SendAsync(batch).ContinueWith(async (t) =>
                     {

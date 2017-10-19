@@ -67,12 +67,12 @@ namespace ServiceBusPerfSample
                 MessageSizeInBytes = 1024,
                 MetricsDisplayFrequency = TimeSpan.FromSeconds(10),
                 ReceiveMode = ReceiveMode.PeekLock,
-                ReceiverCount = 0,
-                SenderCount = 1,
+                ReceiverCount = 2,
+                SenderCount = 0,
                 SendBatchCount = 10,
-                ReceiveBatchCount = 1,
-                MaxInflightReceives = 100,
-                MaxInflightSends = 100
+                ReceiveBatchCount = 100,
+                MaxInflightReceives = 3,
+                MaxInflightSends = 50
             };
             settings.ReceivePaths = new string[] { settings.SendPath };
 
