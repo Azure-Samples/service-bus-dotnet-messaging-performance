@@ -11,9 +11,7 @@ namespace ServiceBusPerfSample
     using System;
     using System.Collections.Generic;
     using System.Threading;
-    using Microsoft.ServiceBus;
-    using Microsoft.ServiceBus.Messaging;
-
+    
     sealed class PerformanceApp
     {
         readonly Settings settings;
@@ -23,7 +21,6 @@ namespace ServiceBusPerfSample
 
         public PerformanceApp(Settings settings)
         {
-            ServiceBusEnvironment.SystemConnectivity.Mode = settings.ConnectivityMode;
             this.settings = settings;
             this.metrics = new Metrics(settings);
             this.cancellationTokenSource = new CancellationTokenSource();
@@ -33,34 +30,7 @@ namespace ServiceBusPerfSample
         public async void Start()
         {
             this.settings.PrintSettings();
-
-            var namespaceManager = NamespaceManager.CreateFromConnectionString(this.settings.ConnectionString);
-            if (this.settings.EntityType == EntityType.Topic)
-            {
-                Console.WriteLine("Creating topic: {0}...", this.settings.TopicPath);
-                var topicDescription = new TopicDescription(this.settings.TopicPath)
-                {
-                    EnablePartitioning = true,
-                };
-
-                await namespaceManager.CreateTopicAsync(topicDescription);
-                foreach (var subscriptionName in this.settings.SubscriptionNames)
-                {
-                    Console.WriteLine("Creating subscription: {0}...", subscriptionName);
-                    await namespaceManager.CreateSubscriptionAsync(this.settings.TopicPath, subscriptionName);
-                }
-            }
-            else
-            {
-                Console.WriteLine("Creating queue: {0}...", this.settings.QueuePath);
-                var queueDescription = new QueueDescription(this.settings.QueuePath)
-                {
-                    EnablePartitioning = true,
-                };
-
-                await namespaceManager.CreateQueueAsync(queueDescription);
-            }
-
+            
             tasks.Add(new ReceiverTask(settings, this.metrics, this.cancellationTokenSource.Token));
             tasks.Add(new SenderTask(settings, this.metrics, this.cancellationTokenSource.Token));
 
@@ -79,18 +49,6 @@ namespace ServiceBusPerfSample
             this.metrics.WriteSummary();
             this.cancellationTokenSource.Cancel();
             this.tasks.ForEach((t) => t.Close());
-
-            var namespaceManager = NamespaceManager.CreateFromConnectionString(this.settings.ConnectionString);
-            if (this.settings.EntityType == EntityType.Topic)
-            {
-                Console.WriteLine("\nDeleting topic: {0}...", this.settings.TopicPath);
-                namespaceManager.DeleteTopicAsync(this.settings.TopicPath).Fork();
-            }
-            else
-            {
-                Console.WriteLine("\nDeleting queue: {0}...", this.settings.QueuePath);
-                namespaceManager.DeleteQueueAsync(this.settings.QueuePath).Fork();
-            }
         }
     }
 }

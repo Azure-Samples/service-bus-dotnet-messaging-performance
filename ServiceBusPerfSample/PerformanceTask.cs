@@ -12,18 +12,14 @@ namespace ServiceBusPerfSample
     using System.Collections.Generic;
     using System.Threading;
     using System.Threading.Tasks;
-    using Microsoft.ServiceBus;
-    using Microsoft.ServiceBus.Messaging;
-
+    
     abstract class PerformanceTask
     {
         protected PerformanceTask(Settings settings, Metrics metrics, CancellationToken cancellationToken)
         {
             this.Settings = settings;
             this.Metrics = metrics;
-            this.Factories = new List<MessagingFactory>();
             this.CancellationToken = cancellationToken;
-            this.ConnectionString = new ServiceBusConnectionStringBuilder(this.Settings.ConnectionString) { TransportType = settings.TransportType }.ToString();
         }
 
         protected Settings Settings { get; private set; }
@@ -31,9 +27,7 @@ namespace ServiceBusPerfSample
         protected string ConnectionString { get; private set; }
 
         protected Metrics Metrics { get; private set; }
-
-        protected List<MessagingFactory> Factories { get; private set; }
-
+        
         protected CancellationToken CancellationToken { get; private set; }
 
         public void Close()
@@ -48,44 +42,18 @@ namespace ServiceBusPerfSample
 
         public async Task StartAsync()
         {
-            await OnStart();
+            await OnStartAsync();
         }
 
-        public async Task CloseAsync()
+        public Task CloseAsync()
         {
-            await this.Factories.ParallelForEachAsync(async (f) => await Extensions.IgnoreExceptionAsync(async () => await f.CloseAsync()));
+            return Task.CompletedTask;
         }
 
         protected abstract Task OnOpenAsync();
 
-        protected abstract Task OnStart();
+        protected abstract Task OnStartAsync();
        
-        protected async Task ExecuteOperationAsync(Func<Task> action)
-        {
-            TimeSpan sleep = TimeSpan.Zero;
-            try
-            {
-                await action();
-            }
-            catch (Exception ex)
-            {
-
-                if (ex is ServerBusyException)
-                {
-                    this.Metrics.IncreaseServerBusy(1);
-                    sleep = TimeSpan.FromSeconds(10);
-                }
-                else
-                {
-                    this.Metrics.IncreaseErrorCount(1);
-                    sleep = TimeSpan.FromSeconds(3);
-                }
-            }
-
-            if (sleep > TimeSpan.Zero && !this.CancellationToken.IsCancellationRequested)
-            {
-                await Extensions.Delay(sleep, this.CancellationToken);
-            }
-        }
+        
     }
 }

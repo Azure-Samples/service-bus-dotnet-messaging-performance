@@ -14,73 +14,100 @@ namespace ServiceBusPerfSample
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
-    using Microsoft.ServiceBus;
-    using Microsoft.ServiceBus.Messaging;
+    using Microsoft.Azure.ServiceBus.Core;
+    using Microsoft.Azure.ServiceBus;
 
     sealed class SenderTask : PerformanceTask
     {
-        readonly List<MessageSender> senders;
+        readonly List<Task> senders;
 
         public SenderTask(Settings settings, Metrics metrics, CancellationToken cancellationToken)
             : base(settings, metrics, cancellationToken)
         {
-            this.senders = new List<MessageSender>();
+            this.senders = new List<Task>();
         }
 
-        protected override async Task OnOpenAsync()
+        protected override Task OnOpenAsync()
         {
-            Extensions.For(0, this.Settings.SenderCount, (i) => this.Factories.Add(MessagingFactory.CreateFromConnectionString(this.ConnectionString)));
-            var senderPath = this.Settings.EntityType == EntityType.Topic ? this.Settings.TopicPath : this.Settings.QueuePath;
+            return Task.CompletedTask;
+        }
+
+        protected override Task OnStartAsync()
+        {
             for (int i = 0; i < this.Settings.SenderCount; i++)
             {
-                var factory = MessagingFactory.CreateFromConnectionString(this.ConnectionString);
-                factory.RetryPolicy = RetryPolicy.NoRetry;
-                this.Factories.Add(factory);
-                var sender = factory.CreateMessageSender(senderPath);
-                sender.RetryPolicy = RetryPolicy.NoRetry;
-                this.senders.Add(sender);
+                this.senders.Add(Task.Run(SendTask));
             }
-
-            await this.senders.First().SendAsync(new BrokeredMessage());
-
-            await this.senders.ParallelForEachAsync(async (sender, senderIndex) =>
-            {
-                await sender.SendAsync(new BrokeredMessage() { TimeToLive = TimeSpan.FromMilliseconds(1) });
-            });
-        }
-
-        protected override async Task OnStart()
-        {
-            await SendTask();
+            return Task.CompletedTask;
         }
 
         async Task SendTask()
         {
+            var sender = new MessageSender(this.Settings.ConnectionString, this.Settings.SendPath);
             var payload = new byte[this.Settings.MessageSizeInBytes];
-            await senders.ParallelForEachAsync(async (sender, senderIndex) =>
+            var semaphore = new SemaphoreSlim(this.Settings.MaxInflightSends + 1);
+            var sw = Stopwatch.StartNew();
+
+            while (!this.CancellationToken.IsCancellationRequested)
             {
-                while (!this.CancellationToken.IsCancellationRequested)
+                await semaphore.WaitAsync();
+
+                var msec = sw.ElapsedMilliseconds;
+
+                if (Settings.SendBatchCount <= 1)
                 {
-                    await ExecuteOperationAsync(async () =>
+                    sender.SendAsync(new Message(payload)).ContinueWith(async (t) =>
                     {
-                        List<BrokeredMessage> messages = new List<BrokeredMessage>();
-                        Extensions.For(0, this.Settings.SendBatchCount, (messageIndex) => messages.Add(new BrokeredMessage(payload)));
-                        try
+                        if (t.IsFaulted)
                         {
-                            Stopwatch sw = Stopwatch.StartNew();
-                            await sender.SendBatchAsync(messages);
-                            sw.Stop();
-                            this.Metrics.IncreaseSendLatency(sw.Elapsed.TotalMilliseconds);
-                            this.Metrics.IncreaseSendMessages(messages.Count);
-                            this.Metrics.IncreaseSendBatch(1);
+                            this.Metrics.IncreaseErrorCount(1);
+                            if (t.Exception?.GetType() == typeof(ServerBusyException))
+                            {
+                                this.Metrics.IncreaseServerBusy(1);
+                                if (!this.CancellationToken.IsCancellationRequested)
+                                {
+                                    await Task.Delay(3000, this.CancellationToken);
+                                }
+                            }
                         }
-                        finally
+                        else
                         {
-                            messages.ForEach(m => m.Dispose());
+                            this.Metrics.IncreaseSendLatency(sw.ElapsedMilliseconds - msec);
+                            this.Metrics.IncreaseSendMessages(1);
                         }
-                    });
+                        semaphore.Release();
+                    }).Fork();
                 }
-            });
+                else
+                {
+                    List<Message> batch = new List<Message>();
+                    for (int i = 0; i < Settings.SendBatchCount; i++)
+                    {
+                        batch.Add(new Message(payload));
+                    }
+                    sender.SendAsync(batch).ContinueWith(async (t) =>
+                    {
+                        if (t.IsFaulted)
+                        {
+                            this.Metrics.IncreaseErrorCount(1);
+                            if (t.Exception?.GetType() == typeof(ServerBusyException))
+                            {
+                                this.Metrics.IncreaseServerBusy(1);
+                                if (!this.CancellationToken.IsCancellationRequested)
+                                {
+                                    await Task.Delay(3000, this.CancellationToken);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            this.Metrics.IncreaseSendLatency(sw.ElapsedMilliseconds - msec);
+                            this.Metrics.IncreaseSendMessages(Settings.SendBatchCount);
+                        }
+                        semaphore.Release();
+                    }).Fork();
+                }
+            }
         }
     }
 }

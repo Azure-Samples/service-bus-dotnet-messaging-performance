@@ -8,10 +8,9 @@
 
 namespace ServiceBusPerfSample
 {
+    using Microsoft.Azure.ServiceBus;
     using System;
-    using Microsoft.ServiceBus;
-    using Microsoft.ServiceBus.Messaging;
-
+    
     class Program
     {
         // Paste connection string here.  Otherwise, it will be read from console.
@@ -24,8 +23,12 @@ namespace ServiceBusPerfSample
 
             string connectionString = ReadConnectionString();
 
+            
+
             do
             {
+                var settings = Settings.CreateQueueSettings(connectionString);
+#if foo
                 Console.WriteLine("\n\nOptions:");
                 Console.WriteLine("\t1) Queue");
                 Console.WriteLine("\t2) Topic with 1 Subscription");
@@ -40,21 +43,21 @@ namespace ServiceBusPerfSample
                 switch (option.ToLowerInvariant())
                 {
                     case "1":
-                        settings = Settings.CreateQueueSettings(connectionString, TransportType.NetMessaging);
+                        settings = Settings.CreateQueueSettings(connectionString);
                         break;
 
                     case "2":
-                        settings = Settings.CreateTopicSettings(connectionString, 1, TransportType.NetMessaging);
+                        settings = Settings.CreateTopicSettings(connectionString, 1);
                         break;
 
                     case "3":
-                        settings = Settings.CreateTopicSettings(connectionString, 5, TransportType.NetMessaging);
+                        settings = Settings.CreateTopicSettings(connectionString, 5);
                         break;
 
                     case "x":
                         return;
                 }
-
+#endif
                 if (settings != null)
                 {
                     Console.WriteLine("\n\nPress <ENTER> to STOP at anytime\n");
@@ -73,6 +76,11 @@ namespace ServiceBusPerfSample
             string connectionString = ConnectionString;
             do
             {
+                if (connectionString == null)
+                {
+                    connectionString = Properties.Settings.Default.connectionString;
+                }
+
                 if (connectionString == null)
                 {
                     Console.Write("\nEnter Service Bus Connection String or type 'exit': ");

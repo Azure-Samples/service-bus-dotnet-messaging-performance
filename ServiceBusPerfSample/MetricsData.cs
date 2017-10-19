@@ -9,19 +9,42 @@
 namespace ServiceBusPerfSample
 {
     using System;
+    using System.Threading;
 
     sealed class MetricsData
     {
-        public TimeSpan Elapsed { get; set; }
+        private TimeSpan elapsed;
 
-        public long SendBatchCount { get; set; }
+        public TimeSpan Elapsed
+        {
+            get { return elapsed; }
+            set { elapsed = value; }
+        }
 
-        public long SendMessageCount { get; set; }
+        private long sendMessageCount;
 
-        public long ServerBusyCount { get; set; }
+        public long SendMessageCount
+        {
+            get { return sendMessageCount; }
+            set { sendMessageCount = value; }
+        }
 
-        public long ErrorCount { get; set; }
+        private long serverBusyCount;
 
+        public long ServerBusyCount
+        {
+            get { return serverBusyCount; }
+            set { serverBusyCount = value; }
+        }
+
+        private long errorCount;
+
+        public long ErrorCount
+        {
+            get { return errorCount; }
+            set { errorCount = value; }
+        }
+        
         public long SendMessageRate
         {
             get
@@ -30,19 +53,40 @@ namespace ServiceBusPerfSample
             }
         }
 
-        public double SendLatency { get; set; }
+        private long sendLatency;
 
+        public long SendLatency
+        {
+            get { return sendLatency; }
+            set { sendLatency = value; }
+        }
+
+        
         public double SendAverageLatency 
         {
             get
             {
-                return Math.Round(this.SendLatency / this.SendBatchCount, 2);
+                return Math.Round(this.SendLatency / (double)this.SendMessageCount, 2);
             }
         }
 
-        public long ReceiveMessageCount { get; set; }
+        private long receiveMessageCount;
 
-        public long ReceiveBatchCount { get; set; }
+        public long ReceiveMessageCount
+        {
+            get { return receiveMessageCount; }
+            set { receiveMessageCount = value; }
+        }
+
+        private long completeMessageCount;
+
+        public long CompleteMessageCount
+        {
+            get { return completeMessageCount; }
+            set { completeMessageCount = value; }
+        }
+
+
 
         public long ReceiveMessageRate
         {
@@ -52,23 +96,38 @@ namespace ServiceBusPerfSample
             }
         }
 
-        public double ReceiveLatency { get; set; }
+        private long receiveLatency;
 
-        public double ReceiveAverageLatency
+        public long ReceiveLatency
+        {
+            get { return receiveLatency; }
+            set { receiveLatency = value; }
+        }
+        
+        public long ReceiveAverageLatency
         {
             get
             {
-                return Math.Round(this.ReceiveLatency / this.ReceiveBatchCount, 2);
+                if (this.ReceiveMessageCount == 0) return 0;
+                return this.ReceiveLatency / this.ReceiveMessageCount;
             }
         }
 
-        public double CompleteLatency { get; set; }
+        private long completeLatency;
 
-        public double CompleteAverageLatency
+        public long CompleteLatency
+        {
+            get { return completeLatency; }
+            set { completeLatency = value; }
+        }
+
+        
+        public long CompleteAverageLatency
         {
             get
             {
-                return Math.Round(this.CompleteLatency / this.ReceiveBatchCount, 2);
+                if (this.CompleteMessageCount == 0) return 0;
+                return this.CompleteLatency / this.CompleteMessageCount;
             }
         }
 
@@ -78,10 +137,9 @@ namespace ServiceBusPerfSample
 
             metricsSnapshot.Elapsed = this.Elapsed;
             metricsSnapshot.SendMessageCount = this.SendMessageCount;
-            metricsSnapshot.SendBatchCount = this.SendBatchCount;
             metricsSnapshot.SendLatency = this.SendLatency;
             metricsSnapshot.ReceiveMessageCount = this.ReceiveMessageCount;
-            metricsSnapshot.ReceiveBatchCount= this.ReceiveBatchCount;
+            metricsSnapshot.CompleteMessageCount = this.CompleteMessageCount;
             metricsSnapshot.ReceiveLatency = this.ReceiveLatency;
             metricsSnapshot.CompleteLatency = this.CompleteLatency;
             metricsSnapshot.ServerBusyCount = this.ServerBusyCount;
@@ -90,16 +148,20 @@ namespace ServiceBusPerfSample
             return metricsSnapshot;
         }
 
+        internal void IncreaseCompleteMessages(long count)
+        {
+            Interlocked.Add(ref completeMessageCount, count);
+        }
+
         public static MetricsData operator -(MetricsData m1, MetricsData m2)
         {
             MetricsData metrics = new MetricsData();
 
             metrics.Elapsed = m1.Elapsed - m2.Elapsed;
             metrics.SendMessageCount = m1.SendMessageCount - m2.SendMessageCount;
-            metrics.SendBatchCount = m1.SendBatchCount - m2.SendBatchCount;
             metrics.SendLatency = m1.SendLatency - m2.SendLatency;
             metrics.ReceiveMessageCount = m1.ReceiveMessageCount - m2.ReceiveMessageCount;
-            metrics.ReceiveBatchCount = m1.ReceiveBatchCount - m2.ReceiveBatchCount;
+            metrics.CompleteMessageCount = m1.CompleteMessageCount - m2.CompleteMessageCount;
             metrics.ReceiveLatency = m1.ReceiveLatency - m2.ReceiveLatency;
             metrics.CompleteLatency = m1.CompleteLatency - m2.CompleteLatency;
             metrics.ServerBusyCount = m1.ServerBusyCount - m2.ServerBusyCount;
@@ -123,6 +185,41 @@ namespace ServiceBusPerfSample
         static void WriteInfo(object label, object sendRate, object sendLatency, object sendCount, object receiveRate, object receiveLatency, object completeLatency, object receiveCount, object serverBusy, object otherError)
         {
             Console.WriteLine("{0,11} {1,9} {2,7} {3,10} {4,9} {5,7} {6,7} {7,10} {8,10} {9,10}", label, sendRate, sendLatency, sendCount, receiveRate, receiveLatency, completeLatency, receiveCount, serverBusy, otherError);
+        }
+
+        public void IncreaseSendMessages(long count)
+        {
+            Interlocked.Add(ref this.sendMessageCount, count);
+        }
+
+        public void IncreaseSendLatency(long ms)
+        {
+            Interlocked.Add(ref this.sendLatency, ms);
+        }
+
+        public void IncreaseReceiveMessages(long count)
+        {
+            Interlocked.Add(ref this.receiveMessageCount, count);
+        }
+        
+        public void IncreaseReceiveLatency(long ms)
+        {
+            Interlocked.Add(ref this.receiveLatency, ms);
+        }
+
+        public void IncreaseCompleteLatency(long ms)
+        {
+            Interlocked.Add(ref this.completeLatency, ms);
+        }
+
+        public void IncreaseServerBusy(long count)
+        {
+            Interlocked.Add(ref this.serverBusyCount, count);
+        }
+
+        public void IncreaseErrorCount(long count)
+        {
+            Interlocked.Add(ref this.errorCount, count);
         }
     }
 }

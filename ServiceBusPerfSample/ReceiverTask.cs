@@ -8,89 +8,148 @@
 
 namespace ServiceBusPerfSample
 {
+    using Microsoft.Azure.ServiceBus;
+    using Microsoft.Azure.ServiceBus.Core;
     using System;
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
-    using Microsoft.ServiceBus;
-    using Microsoft.ServiceBus.Messaging;
 
     sealed class ReceiverTask : PerformanceTask
     {
-        readonly List<MessageReceiver> receivers;
+        readonly List<Task> receivers;
 
         public ReceiverTask(Settings settings, Metrics metrics, CancellationToken cancellationToken)
-            :base(settings, metrics, cancellationToken)
+            : base(settings, metrics, cancellationToken)
         {
-            this.receivers = new List<MessageReceiver>();
+            this.receivers = new List<Task>();
         }
 
-        protected override async Task OnOpenAsync()
+        protected override Task OnOpenAsync()
         {
-            var receiverPaths = this.Settings.EntityType == EntityType.Topic ? this.Settings.SubscriptionNames.Select((n) => SubscriptionClient.FormatSubscriptionPath(this.Settings.TopicPath, n)) : new string[] { this.Settings.QueuePath };
+            return Task.CompletedTask;
+        }
+
+        protected override Task OnStartAsync()
+        {
+            var receiverPaths = this.Settings.ReceivePaths;
             foreach (var receiverPath in receiverPaths)
             {
                 for (int i = 0; i < this.Settings.ReceiverCount; i++)
                 {
-                    var factory = MessagingFactory.CreateFromConnectionString(this.ConnectionString);
-                    factory.RetryPolicy = RetryPolicy.NoRetry;
-                    this.Factories.Add(factory);
-                    var receiver = factory.CreateMessageReceiver(receiverPath, this.Settings.ReceiveMode);
-                    receiver.RetryPolicy = RetryPolicy.NoRetry;
-                    this.receivers.Add(receiver);
+                    this.receivers.Add(Task.Run(() => ReceiveTask(receiverPath)));
                 }
             }
-
-            await this.receivers.First().ReceiveAsync();
-
-            await this.receivers.ParallelForEachAsync(async (receiver, receiverIndex) =>
-            {
-                await Extensions.IgnoreExceptionAsync(async () => await receiver.ReceiveAsync(TimeSpan.Zero));
-            });
+            return Task.CompletedTask;
         }
 
-        protected override async Task OnStart()
+        async Task ReceiveTask(string path)
         {
-            await ReceiveTask();
-        }
+            var receiver = new MessageReceiver(this.Settings.ConnectionString, path, this.Settings.ReceiveMode);
+            var semaphore = new SemaphoreSlim(this.Settings.MaxInflightReceives + 1);
+            var sw = Stopwatch.StartNew();
 
-        async Task ReceiveTask()
-        {
-            await receivers.ParallelForEachAsync(async (receiver, receiverIndex) =>
+            while (!this.CancellationToken.IsCancellationRequested)
             {
-                while (!this.CancellationToken.IsCancellationRequested)
+                await semaphore.WaitAsync();
+
+                var msec = sw.ElapsedMilliseconds;
+
+                if (Settings.ReceiveBatchCount <= 1)
                 {
-                    await ExecuteOperationAsync(async () =>
+                    receiver.ReceiveAsync().ContinueWith(async (t) =>
                     {
-                        Stopwatch receiveStopwatch = Stopwatch.StartNew();
-                        var receivedMessages = await receiver.ReceiveBatchAsync(this.Settings.ReceiveBatchCount);
-                        receiveStopwatch.Stop();
-                        this.Metrics.IncreaseReceiveLatency(receiveStopwatch.Elapsed.TotalMilliseconds);
-                        this.Metrics.IncreaseReceiveMessages(receivedMessages.Count());
-                        this.Metrics.IncreaseReceiveBatch(1);
-
-                        try
+                        if (t.IsFaulted)
                         {
-                            if (!this.CancellationToken.IsCancellationRequested && this.Settings.ReceiveMode == ReceiveMode.PeekLock && receivedMessages.Any())
+                            this.Metrics.IncreaseErrorCount(1);
+                            if (t.Exception?.GetType() == typeof(ServerBusyException))
                             {
-                                Stopwatch completeStopwatch = Stopwatch.StartNew();
-                                await receiver.CompleteBatchAsync(receivedMessages.Select(m => m.LockToken));
-                                completeStopwatch.Stop();
-                                this.Metrics.IncreaseCompleteLatency(completeStopwatch.Elapsed.TotalMilliseconds);
+                                this.Metrics.IncreaseServerBusy(1);
+                                if (!this.CancellationToken.IsCancellationRequested)
+                                {
+                                    await Task.Delay(3000, this.CancellationToken);
+                                }
                             }
+                            semaphore.Release();
                         }
-                        finally
+                        else
                         {
-                            if (receivedMessages != null)
+                            this.Metrics.IncreaseReceiveLatency((long)(sw.ElapsedMilliseconds - msec));
+                            this.Metrics.IncreaseReceiveMessages(1);
+                            msec = sw.ElapsedMilliseconds;
+                            receiver.CompleteAsync(t.Result.SystemProperties.LockToken).ContinueWith(async (t1) =>
                             {
-                                receivedMessages.ForEach((m, i) => m.Dispose());
-                            }
-                        }
-                    });
+                                if (t1.IsFaulted)
+                                {
+                                    this.Metrics.IncreaseErrorCount(1);
+                                    if (t1.Exception?.GetType() == typeof(ServerBusyException))
+                                    {
+                                        this.Metrics.IncreaseServerBusy(1);
+                                        if (!this.CancellationToken.IsCancellationRequested)
+                                        {
+                                            await Task.Delay(3000, this.CancellationToken);
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    this.Metrics.IncreaseCompleteLatency((long)(sw.ElapsedMilliseconds - msec));
+                                    this.Metrics.IncreaseCompleteMessages(1);
+                                }
+                                semaphore.Release();
+                            }).Fork();
+                        };
+                    }).Fork();
                 }
-            });
+                else
+                {
+                    receiver.ReceiveAsync(Settings.ReceiveBatchCount).ContinueWith(async (t) =>
+                    {
+                        if (t.IsFaulted)
+                        {
+                            this.Metrics.IncreaseErrorCount(1);
+                            if (t.Exception?.GetType() == typeof(ServerBusyException))
+                            {
+                                this.Metrics.IncreaseServerBusy(1);
+                                if (!this.CancellationToken.IsCancellationRequested)
+                                {
+                                    await Task.Delay(3000, this.CancellationToken);
+                                }
+                            }
+                            semaphore.Release();
+                        }
+                        else
+                        {
+                            this.Metrics.IncreaseReceiveLatency((long)(sw.ElapsedMilliseconds - msec));
+                            this.Metrics.IncreaseReceiveMessages(t.Result.Count);
+                            msec = sw.ElapsedMilliseconds;
+                            receiver.CompleteAsync(t.Result.Select((m) => { return m.SystemProperties.LockToken; })).ContinueWith(async (t1) =>
+                            {
+                                if (t1.IsFaulted)
+                                {
+                                    this.Metrics.IncreaseErrorCount(1);
+                                    if (t1.Exception?.GetType() == typeof(ServerBusyException))
+                                    {
+                                        this.Metrics.IncreaseServerBusy(1);
+                                        if (!this.CancellationToken.IsCancellationRequested)
+                                        {
+                                            await Task.Delay(3000, this.CancellationToken);
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    this.Metrics.IncreaseCompleteLatency((long)(sw.ElapsedMilliseconds - msec));
+                                    this.Metrics.IncreaseCompleteMessages(t.Result.Count);
+                                }
+                                semaphore.Release();
+                            }).Fork();
+                        };
+                    }).Fork();
+                }
+            }
         }
     }
 }

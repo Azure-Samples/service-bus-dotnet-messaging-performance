@@ -38,74 +38,37 @@ namespace ServiceBusPerfSample
 
         public void IncreaseSendMessages(long count)
         {
-            lock (syncObject)
-            {
-                this.metricsData.SendMessageCount += count;
-            }
+            metricsData.IncreaseSendMessages(count);
         }
 
-        public void IncreaseSendBatch(long count)
+        public void IncreaseSendLatency(long ms)
         {
-            lock (syncObject)
-            {
-                this.metricsData.SendBatchCount += count;
-            }
-        }
-
-        public void IncreaseSendLatency(double ms)
-        {
-            lock (syncObject)
-            {
-                this.metricsData.SendLatency += ms;
-            }
+            metricsData.IncreaseSendLatency(ms);
         }
 
         public void IncreaseReceiveMessages(long count)
         {
-            lock (syncObject)
-            {
-                this.metricsData.ReceiveMessageCount += count;
-            }
+            metricsData.IncreaseReceiveMessages(count);
         }
 
-        public void IncreaseReceiveBatch(long count)
+        public void IncreaseReceiveLatency(long ms)
         {
-            lock (syncObject)
-            {
-                this.metricsData.ReceiveBatchCount += count;
-            }
+            metricsData.IncreaseReceiveLatency(ms);
         }
 
-        public void IncreaseReceiveLatency(double ms)
+        public void IncreaseCompleteLatency(long ms)
         {
-            lock (syncObject)
-            {
-                this.metricsData.ReceiveLatency += ms;
-            }
-        }
-
-        public void IncreaseCompleteLatency(double ms)
-        {
-            lock (syncObject)
-            {
-                this.metricsData.CompleteLatency += ms;
-            }
+            metricsData.IncreaseCompleteLatency(ms);
         }
 
         public void IncreaseServerBusy(long count)
         {
-            lock (syncObject)
-            {
-                this.metricsData.ServerBusyCount += count;
-            }
+            metricsData.IncreaseServerBusy(count);
         }
 
         public void IncreaseErrorCount(long count)
         {
-            lock (syncObject)
-            {
-                this.metricsData.ErrorCount += count;
-            }
+            metricsData.IncreaseErrorCount(count);
         }
 
         public async Task StartMetricsTask(CancellationToken cancellationToken)
@@ -145,14 +108,14 @@ namespace ServiceBusPerfSample
         public MetricsData GetSnapshot()
         {
             MetricsData metricsSnapshot;
-
-            lock (syncObject)
-            {
-                metricsSnapshot = this.metricsData.Clone();
-                metricsSnapshot.Elapsed = this.Elapsed;
-            }
-
+            metricsSnapshot = this.metricsData.Clone();
+            metricsSnapshot.Elapsed = this.Elapsed;
             return metricsSnapshot;
+        }
+
+        internal void IncreaseCompleteMessages(int v)
+        {
+            metricsData.IncreaseCompleteMessages(v);
         }
     }
 }
