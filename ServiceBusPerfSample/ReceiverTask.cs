@@ -42,114 +42,169 @@ namespace ServiceBusPerfSample
                     this.receivers.Add(Task.Run(() => ReceiveTask(receiverPath)));
                 }
             }
-            return Task.CompletedTask;
+            return Task.WhenAll(this.receivers);
         }
 
         async Task ReceiveTask(string path)
         {
             var receiver = new MessageReceiver(this.Settings.ConnectionString, path, this.Settings.ReceiveMode);
+            receiver.PrefetchCount = Settings.PrefetchCount;
             var semaphore = new SemaphoreSlim(this.Settings.MaxInflightReceives + 1);
+            var done = new SemaphoreSlim(1); done.Wait();
             var sw = Stopwatch.StartNew();
+            long totalReceives = 0;
 
-            while (!this.CancellationToken.IsCancellationRequested)
+            for (int j = 0; j < Settings.MessageCount && !this.CancellationToken.IsCancellationRequested; j ++)
             {
-                await semaphore.WaitAsync();
+                var receiveMetrics = new ReceiveMetrics() { Tick = sw.ElapsedTicks };
 
-                var msec = sw.ElapsedMilliseconds;
+                var nsec = sw.ElapsedTicks;
+                await semaphore.WaitAsync().ConfigureAwait(false);
+                receiveMetrics.GateLockDuration100ns = sw.ElapsedTicks - nsec;
 
                 if (Settings.ReceiveBatchCount <= 1)
                 {
+                    nsec = sw.ElapsedTicks;
                     receiver.ReceiveAsync().ContinueWith(async (t) =>
                     {
+                        receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
                         if (t.IsFaulted)
                         {
-                            this.Metrics.IncreaseErrorCount(1);
                             if (t.Exception?.GetType() == typeof(ServerBusyException))
                             {
-                                this.Metrics.IncreaseServerBusy(1);
+                                receiveMetrics.BusyErrors = 1;
                                 if (!this.CancellationToken.IsCancellationRequested)
                                 {
-                                    await Task.Delay(3000, this.CancellationToken);
+                                    await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
                                 }
                             }
+                            else
+                            {
+                                receiveMetrics.Errors = 1;
+                            }
+                            Metrics.PushReceiveMetrics(receiveMetrics);
                             semaphore.Release();
+                            if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
+                            {
+                                done.Release();
+                            }
                         }
-                        else
+                        else if ( t.Result != null )
                         {
-                            this.Metrics.IncreaseReceiveLatency((long)(sw.ElapsedMilliseconds - msec));
-                            this.Metrics.IncreaseReceiveMessages(1);
-                            msec = sw.ElapsedMilliseconds;
+                            receiveMetrics.Receives = receiveMetrics.Messages = 1;
+                            nsec = sw.ElapsedTicks;
                             receiver.CompleteAsync(t.Result.SystemProperties.LockToken).ContinueWith(async (t1) =>
                             {
+                                receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
                                 if (t1.IsFaulted)
                                 {
-                                    this.Metrics.IncreaseErrorCount(1);
                                     if (t1.Exception?.GetType() == typeof(ServerBusyException))
                                     {
-                                        this.Metrics.IncreaseServerBusy(1);
+                                        receiveMetrics.BusyErrors = 1;
                                         if (!this.CancellationToken.IsCancellationRequested)
                                         {
-                                            await Task.Delay(3000, this.CancellationToken);
+                                            await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
                                         }
+                                    }
+                                    else
+                                    {
+                                        receiveMetrics.Errors = 1;
                                     }
                                 }
                                 else
                                 {
-                                    this.Metrics.IncreaseCompleteLatency((long)(sw.ElapsedMilliseconds - msec));
-                                    this.Metrics.IncreaseCompleteMessages(1);
+                                    receiveMetrics.Completions = receiveMetrics.CompleteCalls = 1;
                                 }
+                                Metrics.PushReceiveMetrics(receiveMetrics);
                                 semaphore.Release();
+                                if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
+                                {
+                                    done.Release();
+                                }
                             }).Fork();
                         };
+
                     }).Fork();
                 }
                 else
                 {
+                    nsec = sw.ElapsedTicks;
                     receiver.ReceiveAsync(Settings.ReceiveBatchCount).ContinueWith(async (t) =>
                     {
+                        receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
                         if (t.IsFaulted)
                         {
-                            this.Metrics.IncreaseErrorCount(1);
                             if (t.Exception?.GetType() == typeof(ServerBusyException))
                             {
-                                this.Metrics.IncreaseServerBusy(1);
+                                receiveMetrics.BusyErrors = 1;
                                 if (!this.CancellationToken.IsCancellationRequested)
                                 {
-                                    await Task.Delay(3000, this.CancellationToken);
+                                    await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
                                 }
                             }
+                            else
+                            {
+                                receiveMetrics.Errors = 1;
+                            }
+                            Metrics.PushReceiveMetrics(receiveMetrics);
                             semaphore.Release();
+                            if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
+                            {
+                                done.Release();
+                            }
                         }
                         else
                         {
-                            this.Metrics.IncreaseReceiveLatency((long)(sw.ElapsedMilliseconds - msec));
-                            this.Metrics.IncreaseReceiveMessages(t.Result.Count);
-                            msec = sw.ElapsedMilliseconds;
-                            receiver.CompleteAsync(t.Result.Select((m) => { return m.SystemProperties.LockToken; })).ContinueWith(async (t1) =>
+                            receiveMetrics.Messages = t.Result.Count;
+                            receiveMetrics.Receives = 1;
+                            nsec = sw.ElapsedTicks;
+                            if (Settings.ReceiveMode == ReceiveMode.PeekLock)
                             {
-                                if (t1.IsFaulted)
+                                receiver.CompleteAsync(t.Result.Select((m) => { return m.SystemProperties.LockToken; })).ContinueWith(async (t1) =>
                                 {
-                                    this.Metrics.IncreaseErrorCount(1);
-                                    if (t1.Exception?.GetType() == typeof(ServerBusyException))
+                                    receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
+                                    if (t1.IsFaulted)
                                     {
-                                        this.Metrics.IncreaseServerBusy(1);
-                                        if (!this.CancellationToken.IsCancellationRequested)
+                                        if (t1.Exception?.GetType() == typeof(ServerBusyException))
                                         {
-                                            await Task.Delay(3000, this.CancellationToken);
+                                            receiveMetrics.BusyErrors = 1;
+                                            if (!this.CancellationToken.IsCancellationRequested)
+                                            {
+                                                await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            receiveMetrics.Errors = 1;
                                         }
                                     }
-                                }
-                                else
-                                {
-                                    this.Metrics.IncreaseCompleteLatency((long)(sw.ElapsedMilliseconds - msec));
-                                    this.Metrics.IncreaseCompleteMessages(t.Result.Count);
-                                }
+                                    else
+                                    {
+                                        receiveMetrics.CompleteCalls = 1;
+                                        receiveMetrics.Completions = t.Result.Count;
+                                    }
+                                    Metrics.PushReceiveMetrics(receiveMetrics);
+                                    semaphore.Release();
+                                    if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
+                                    {
+                                        done.Release();
+                                    }
+                                }).Fork();
+                            }
+                            else
+                            {
+                                Metrics.PushReceiveMetrics(receiveMetrics);
                                 semaphore.Release();
-                            }).Fork();
+                                if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
+                                {
+                                    done.Release();
+                                }
+                            }
                         };
                     }).Fork();
                 }
             }
+            await done.WaitAsync();
         }
     }
 }

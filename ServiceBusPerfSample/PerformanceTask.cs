@@ -37,12 +37,12 @@ namespace ServiceBusPerfSample
 
         public async Task OpenAsync()
         {
-            await OnOpenAsync();
+            await OnOpenAsync().ConfigureAwait(false);
         }
 
-        public async Task StartAsync()
+        public Task StartAsync()
         {
-            await OnStartAsync();
+            return OnStartAsync();
         }
 
         public Task CloseAsync()

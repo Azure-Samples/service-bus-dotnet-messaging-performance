@@ -1,4 +1,4 @@
-//---------------------------------------------------------------------------------
+﻿//---------------------------------------------------------------------------------
 // Copyright (c) Microsoft Corporation. All rights reserved.  
 //
 // THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
@@ -8,103 +8,54 @@
 
 namespace ServiceBusPerfSample
 {
+    using CommandLine;
     using Microsoft.Azure.ServiceBus;
     using System;
-    
+    using System.Collections.Generic;
+    using System.Linq;
+
     class Program
     {
-        // Paste connection string here.  Otherwise, it will be read from console.
-        const string ConnectionString = null;
-
-        static void Main(params string[] args)
+        static int result = 0;
+        static int Main(params string[] args)
         {
-            Console.WriteLine("Microsoft Service Bus Performance Sample");
-            Console.WriteLine("Copyright (c) Microsoft Corporation. All rights reserved.");
-
-            string connectionString = ReadConnectionString();
-
-            
-
-            do
-            {
-                var settings = Settings.CreateQueueSettings(connectionString);
-#if foo
-                Console.WriteLine("\n\nOptions:");
-                Console.WriteLine("\t1) Queue");
-                Console.WriteLine("\t2) Topic with 1 Subscription");
-                Console.WriteLine("\t3) Topic with 5 Subscription");
-                Console.WriteLine("\tx) Exit");
-
-                while (Console.KeyAvailable) { Console.ReadKey(true); }
-                Console.Write("\nSelect an option: ");
-                var option = Console.ReadLine();
-
-                Settings settings = null;
-                switch (option.ToLowerInvariant())
-                {
-                    case "1":
-                        settings = Settings.CreateQueueSettings(connectionString);
-                        break;
-
-                    case "2":
-                        settings = Settings.CreateTopicSettings(connectionString, 1);
-                        break;
-
-                    case "3":
-                        settings = Settings.CreateTopicSettings(connectionString, 5);
-                        break;
-
-                    case "x":
-                        return;
-                }
-#endif
-                if (settings != null)
-                {
-                    Console.WriteLine("\n\nPress <ENTER> to STOP at anytime\n");
-                    PerformanceApp app = new PerformanceApp(settings);
-                    app.Start();
-                    Console.ReadLine();
-                    app.Stop();
-
-                    Console.WriteLine();
-                }
-            } while (true);
+            CommandLine.Parser.Default.ParseArguments<Settings>(args)
+                 .WithParsed<Settings>(opts => RunOptionsAndReturnExitCode(opts));
+            return result;
         }
-
-        static string ReadConnectionString()
+        
+        static void RunOptionsAndReturnExitCode(Settings settings)
         {
-            string connectionString = ConnectionString;
-            do
+            ServiceBusConnectionStringBuilder cb = new ServiceBusConnectionStringBuilder(settings.ConnectionString);
+            if (string.IsNullOrWhiteSpace(cb.EntityPath))
             {
-                if (connectionString == null)
+                if (string.IsNullOrWhiteSpace(settings.SendPath))
                 {
-                    connectionString = Properties.Settings.Default.connectionString;
+                    Console.WriteLine("--send-path option must be specified if there's no EntityPath in the connection string.");
+                    result = 1;
+                    return;
                 }
-
-                if (connectionString == null)
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(settings.SendPath))
                 {
-                    Console.Write("\nEnter Service Bus Connection String or type 'exit': ");
-                    connectionString = Console.ReadLine();
-                    if (string.Equals(connectionString, "exit", StringComparison.OrdinalIgnoreCase))
-                    {
-                        Environment.Exit(0);
-                    }
+                    settings.SendPath = cb.EntityPath;
                 }
-
-                try
-                {
-                    ServiceBusConnectionStringBuilder builder = new ServiceBusConnectionStringBuilder(connectionString);
-                    connectionString = builder.ToString();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("Error: {0}", ex.Message);
-                    connectionString = null;
-                }
-
-            } while (connectionString == null);
-
-            return connectionString;
+                cb.EntityPath = String.Empty;
+                settings.ConnectionString = cb.ToString(); 
+            }
+            if (settings.ReceivePaths == null || settings.ReceivePaths.Count() == 0)
+            {
+                settings.ReceivePaths = new string[] { settings.SendPath };
+            }
+            Console.WriteLine("\n\nPress <ENTER> to STOP at anytime\n");
+            Metrics metrics = new Metrics(settings);
+            ServiceBusPerformanceApp app = new ServiceBusPerformanceApp(settings, metrics);
+            var experiment = new IncreaseInflightSendsExperiment(10, metrics, settings);
+            app.Run(experiment).Wait();
+            Console.WriteLine("Complete");
+            
         }
     }
 }

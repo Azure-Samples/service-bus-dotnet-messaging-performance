@@ -10,38 +10,55 @@ namespace ServiceBusPerfSample
 {
     using System;
     using System.Collections.Generic;
+    using CommandLine;
+    using CommandLine.Text;
     using Microsoft.Azure.ServiceBus;
 
     class Settings
     {
-        Settings()
-        {
-            this.MaxInflightReceives = 20;
-            this.MaxInflightSends = 20;
-        }
-
+        [Option('C', "connection-string", Required = true, HelpText = "Connection string")]
         public string ConnectionString { get; set; }
-        
-        public long MessageCount { get; set; }
 
-        public int MessageSizeInBytes { get; set; }
-
-        public TimeSpan MetricsDisplayFrequency { get; set; }
-
-        public ReceiveMode ReceiveMode { get; set; }
-
-        public int ReceiverCount { get; set; }
-
-        public int SendBatchCount { get; set; }
-
-        public int SenderCount { get; set; }
-
-        public IList<string> ReceivePaths { get; set; }
-
+        [Option('S', "send-path", Required = false, HelpText = "Send path. Queue or topic name, unless set in connection string EntityPath.")]
         public string SendPath { get; set; }
-        public int MaxInflightSends { get; internal set; }
-        public int MaxInflightReceives { get; internal set; }
-        public int ReceiveBatchCount { get; private set; }
+
+        [Option('R', "receive-paths", Required = false, HelpText = "Receive paths. Mandatory for receiving from topic subscriptions. Must be {topic}/subscriptions/{subscription-name} or {queue-name}")]
+        public IEnumerable<string> ReceivePaths { get; set; }
+
+        [Option('n', "number-of-messages", Required = false, HelpText = "Number of messages to send (default 1000000)")]
+        public long MessageCount { get; set; } = 1000000;
+
+        [Option('b', "message-size-bytes", Required = false, HelpText = "Bytes per message (default 1024)")]
+        public int MessageSizeInBytes { get; set; } = 1024;
+
+        [Option('f', "frequency-metrics", Required = false, HelpText = "Frequency of metrics display (default 10s)")]
+        public TimeSpan MetricsDisplayFrequency { get; set; } = TimeSpan.FromSeconds(10);
+
+        [Option('m', "receive-mode", Required = false, HelpText = "Receive mode.'PeekLock' (default) or 'ReceiveAndDelete'")]
+        public ReceiveMode ReceiveMode { get; set; } = ReceiveMode.ReceiveAndDelete;
+
+        [Option('r', "receiver-count", Required = false, HelpText = "Number of concurrent receivers (default 1)")]
+        public int ReceiverCount { get; set; } = 1;
+
+        [Option('e', "prefetch-count", Required = false, HelpText = "Prefetch count (default 0)")]
+        public int PrefetchCount { get; set; } = 0;
+
+        [Option('t', "send-batch-count", Required = false, HelpText = "Number of messages per batch (default 0, no batching)")]
+        public int SendBatchCount { get; set; } = 0;
+
+        [Option('s', "sender-count", Required = false, HelpText = "Number of concurrent senders (default 1)")]
+        public int SenderCount { get; set; } = 1;
+
+        [Option('i', "inflight-sends", Required = false, HelpText = "Maximum numbers of concurrent in-flight send operations (default 10)")]
+        public int CmdlineMaxInflightSends { get { return MaxInflightSends.Value; } set { MaxInflightSends = new Observable<int>(value); } }
+
+        public Observable<int> MaxInflightSends { get; internal set; } = new Observable<int>(100);
+
+        [Option('j', "inflight-receives", Required = false, HelpText = "Maximum number of concurrent in-flight receive operations per receiver (default 1)")]
+        public int MaxInflightReceives { get; internal set; } = 1;
+
+        [Option('v', "receive-batch-count", Required = false, HelpText = "Max number of messages per batch (default 0, no batching)")]
+        public int ReceiveBatchCount { get; private set; } = 0;
 
         public void PrintSettings()
         {
@@ -51,57 +68,23 @@ namespace ServiceBusPerfSample
             Console.WriteLine("{0}: {1}", "MessageCount", this.MessageCount);
             Console.WriteLine("{0}: {1}", "MessageSizeInBytes", this.MessageSizeInBytes);
             Console.WriteLine("{0}: {1}", "SenderCount", this.SenderCount);
+            Console.WriteLine("{0}: {1}", "SendBatchCount", this.SendBatchCount);
             Console.WriteLine("{0}: {1}", "ReceiveMode", this.ReceiveMode);
             Console.WriteLine("{0}: {1}", "ReceiverCount", this.ReceiverCount);
+            Console.WriteLine("{0}: {1}", "ReceiveBatchCount", this.ReceiveBatchCount);
+            Console.WriteLine("{0}: {1}", "ReceiveMode", this.ReceiveMode);
             Console.WriteLine("{0}: {1}", "MetricsDisplayFrequency", this.MetricsDisplayFrequency);
             Console.WriteLine();
         }
 
-        public static Settings CreateQueueSettings(string connectionString)
+        [Usage()]
+        public static IEnumerable<Example> Examples
         {
-            Settings settings = new Settings()
+            get
             {
-                ConnectionString = connectionString,
-                SendPath  = string.Format("myqueue"),
-                MessageCount = 1000000,
-                MessageSizeInBytes = 1024,
-                MetricsDisplayFrequency = TimeSpan.FromSeconds(10),
-                ReceiveMode = ReceiveMode.PeekLock,
-                ReceiverCount = 2,
-                SenderCount = 0,
-                SendBatchCount = 10,
-                ReceiveBatchCount = 100,
-                MaxInflightReceives = 3,
-                MaxInflightSends = 50
-            };
-            settings.ReceivePaths = new string[] { settings.SendPath };
-
-            return settings;
-        }
-
-        public static Settings CreateTopicSettings(string connectionString, int subscriptionCount)
-        {
-            Settings settings = new Settings()
-            {
-                ConnectionString = connectionString,
-                SendPath = string.Format("mytopic"),
-                MessageCount = 10000000,
-                MessageSizeInBytes = 1024,
-                MetricsDisplayFrequency = TimeSpan.FromSeconds(10),
-                ReceiveMode = ReceiveMode.PeekLock,
-                ReceiverCount = 1,
-                SenderCount = 0,
-            };
-
-            var subscriptionNames = new List<string>();
-            for (int i = 1; i <= subscriptionCount; i++)
-            {
-                subscriptionNames.Add(string.Format("sub_{0}", i.ToString("##")));
+                yield return new Example("queue scenario", new Settings { ConnectionString = "{Connection-String-with-EntityPath}" });
+                yield return new Example("topic scenario", new Settings { ConnectionString = "{Connection-String}", SendPath = "{Topic-Name}", ReceivePaths = new string[] { "{Topic-Name}/subscriptions/{Subscription-Name-1}", "{Topic-Name}/subscriptions/{Subscription-Name-2}" } });
             }
-
-            settings.ReceivePaths = subscriptionNames;
-
-            return settings;
         }
     }
 }

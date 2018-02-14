@@ -15,7 +15,7 @@ namespace ServiceBusPerfSample
 
     static class Extensions
     {
-        public static async Task ParallelForEachAsync<TSource>(this IEnumerable<TSource> source, Func<TSource, Task> action)
+        public static Task ParallelForEachAsync<TSource>(this IEnumerable<TSource> source, Func<TSource, Task> action)
         {
             List<Task> tasks = new List<Task>();
             foreach (TSource i in source)
@@ -23,10 +23,10 @@ namespace ServiceBusPerfSample
                 tasks.Add(action(i));
             }
 
-            await Task.WhenAll(tasks.ToArray());
+            return Task.WhenAll(tasks.ToArray());
         }
 
-        public static async Task ParallelForEachAsync<TSource>(this IEnumerable<TSource> source, Func<TSource, long, Task> action)
+        public static Task ParallelForEachAsync<TSource>(this IEnumerable<TSource> source, Func<TSource, long, Task> action)
         {
             List<Task> tasks = new List<Task>();
 
@@ -37,7 +37,7 @@ namespace ServiceBusPerfSample
                 index++;
             }
 
-            await Task.WhenAll(tasks.ToArray());
+            return Task.WhenAll(tasks.ToArray());
         }
 
         public static void ForEach<TSource>(this IEnumerable<TSource> source, Action<TSource, long> action)
@@ -72,14 +72,14 @@ namespace ServiceBusPerfSample
                 tasks.Add(action(i));
             }
 
-            await Task.WhenAll(tasks.ToArray());
+            await Task.WhenAll(tasks.ToArray()).ConfigureAwait(false);
         }
 
         public static async Task Delay(TimeSpan delay, CancellationToken cancellationToken)
         {
             try
             {
-                await Task.Delay(delay, cancellationToken);
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
             catch (TaskCanceledException)
             {
@@ -91,7 +91,7 @@ namespace ServiceBusPerfSample
         {
             try
             {
-                await task();
+                await task().ConfigureAwait(false);
             }
             catch
             {

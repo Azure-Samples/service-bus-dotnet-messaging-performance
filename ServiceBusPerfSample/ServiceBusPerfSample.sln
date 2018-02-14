@@ -1,9 +1,9 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 14
-VisualStudioVersion = 14.0.25123.0
+# Visual Studio 15
+VisualStudioVersion = 15.0.27130.2027
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ServiceBusPerfSample", "ServiceBusPerfSample.csproj", "{885F165B-411C-41AB-A28C-D9D84E4106FF}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ServiceBusPerfSample", "ServiceBusPerfSample.csproj", "{885F165B-411C-41AB-A28C-D9D84E4106FF}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -40,11 +40,14 @@ Global
 		{885F165B-411C-41AB-A28C-D9D84E4106FF}.Release|ia64.ActiveCfg = Release|Any CPU
 		{885F165B-411C-41AB-A28C-D9D84E4106FF}.Release|Itanium.ActiveCfg = Release|Any CPU
 		{885F165B-411C-41AB-A28C-D9D84E4106FF}.Release|Win32.ActiveCfg = Release|Any CPU
-		{885F165B-411C-41AB-A28C-D9D84E4106FF}.Release|x64.ActiveCfg = Release|x64
-		{885F165B-411C-41AB-A28C-D9D84E4106FF}.Release|x64.Build.0 = Release|x64
+		{885F165B-411C-41AB-A28C-D9D84E4106FF}.Release|x64.ActiveCfg = Release|Any CPU
+		{885F165B-411C-41AB-A28C-D9D84E4106FF}.Release|x64.Build.0 = Release|Any CPU
 		{885F165B-411C-41AB-A28C-D9D84E4106FF}.Release|x86.ActiveCfg = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {A04B4FC6-D971-41B3-AF99-B40E716FD0D1}
 	EndGlobalSection
 EndGlobal

@@ -9,113 +9,88 @@
 namespace ServiceBusPerfSample
 {
     using System;
+    using System.Collections.Generic;
     using System.Diagnostics;
-    using System.Threading;
     using System.Threading.Tasks;
 
-    sealed class Metrics
+    sealed class Metrics : IObservable<SendMetrics>, IObservable<ReceiveMetrics>
     {
-        readonly object syncObject;
-        readonly MetricsData metricsData;
-        readonly Settings settings;
-        Stopwatch stopwatch;
+        object sendMetricsObserverLock = new object();
+        List<IObserver<SendMetrics>> sendMetricsObservers = new List<IObserver<SendMetrics>>();
+        object receiveMetricsObserverLock = new object();
+        List<IObserver<ReceiveMetrics>> receiveMetricsObservers = new List<IObserver<ReceiveMetrics>>();
+        private Stopwatch stopwatch;
 
         public Metrics(Settings settings)
         {
-            this.syncObject = new object();
-            this.metricsData = new MetricsData();
-            this.stopwatch = new Stopwatch();
-            this.settings = settings;
+            this.stopwatch = Stopwatch.StartNew();
         }
-
-        public TimeSpan Elapsed
+        
+        public void PushSendMetrics(SendMetrics sendMetrics)
         {
-            get
+            Task.Run(() =>
             {
-                return this.stopwatch.Elapsed;
-            }
-        }
+                sendMetrics.Tick = stopwatch.ElapsedMilliseconds;
 
-        public void IncreaseSendMessages(long count)
-        {
-            metricsData.IncreaseSendMessages(count);
-        }
-
-        public void IncreaseSendLatency(long ms)
-        {
-            metricsData.IncreaseSendLatency(ms);
-        }
-
-        public void IncreaseReceiveMessages(long count)
-        {
-            metricsData.IncreaseReceiveMessages(count);
-        }
-
-        public void IncreaseReceiveLatency(long ms)
-        {
-            metricsData.IncreaseReceiveLatency(ms);
-        }
-
-        public void IncreaseCompleteLatency(long ms)
-        {
-            metricsData.IncreaseCompleteLatency(ms);
-        }
-
-        public void IncreaseServerBusy(long count)
-        {
-            metricsData.IncreaseServerBusy(count);
-        }
-
-        public void IncreaseErrorCount(long count)
-        {
-            metricsData.IncreaseErrorCount(count);
-        }
-
-        public async Task StartMetricsTask(CancellationToken cancellationToken)
-        {
-            MetricsData.WriteHeader();
-            var previous = this.GetSnapshot();
-            this.Start();
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                await Extensions.Delay(this.settings.MetricsDisplayFrequency, cancellationToken);
-
-                if (cancellationToken.IsCancellationRequested)
+                IObserver<SendMetrics>[] observers;
+                lock (sendMetricsObserverLock)
                 {
-                    break;
+                    observers = sendMetricsObservers.ToArray();
                 }
 
-                var current = this.GetSnapshot();
-                var diff = current - previous;
+                foreach (var observer in observers)
+                {
+                    observer.OnNext(sendMetrics);
+                }                
+            }).Fork();
+        }
 
-                diff.WriteInfo(DateTime.Now.ToLongTimeString());
+        public void PushReceiveMetrics(ReceiveMetrics receiveMetrics)
+        {
+            Task.Run(() =>
+            {
+                receiveMetrics.Tick = stopwatch.ElapsedMilliseconds;
+                IObserver<ReceiveMetrics>[] observers;
+                lock (receiveMetricsObserverLock)
+                {
+                    observers = receiveMetricsObservers.ToArray();
+                }
 
-                previous = current;
+                foreach (var observer in observers)
+                {
+                    observer.OnNext(receiveMetrics);
+                }
+            }).Fork();
+        }
+
+        public IDisposable Subscribe(IObserver<ReceiveMetrics> observer)
+        {
+            lock (receiveMetricsObserverLock)
+            {
+                receiveMetricsObservers.Add(observer);
             }
+            return System.Reactive.Disposables.Disposable.Create(() =>
+            {
+                lock (receiveMetricsObserverLock)
+                {
+                    receiveMetricsObservers.Remove(observer);
+                }
+            });
         }
 
-        public void WriteSummary()
+        public IDisposable Subscribe(IObserver<SendMetrics> observer)
         {
-            MetricsData summary = this.GetSnapshot();
-            summary.WriteInfo("SUMMARY");
-        }
-
-        void Start()
-        {
-            this.stopwatch.Start();
-        }
-
-        public MetricsData GetSnapshot()
-        {
-            MetricsData metricsSnapshot;
-            metricsSnapshot = this.metricsData.Clone();
-            metricsSnapshot.Elapsed = this.Elapsed;
-            return metricsSnapshot;
-        }
-
-        internal void IncreaseCompleteMessages(int v)
-        {
-            metricsData.IncreaseCompleteMessages(v);
+            lock (sendMetricsObserverLock)
+            {
+                sendMetricsObservers.Add(observer);
+            }
+            return System.Reactive.Disposables.Disposable.Create(() =>
+            {
+                lock (sendMetricsObserverLock)
+                {
+                    sendMetricsObservers.Remove(observer);
+                }
+            });
         }
     }
 }
