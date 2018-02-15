@@ -52,23 +52,7 @@ namespace ServiceBusPerfSample
             done.Wait();
             long totalSends = 0;
 
-            this.Settings.MaxInflightSends.Changing += (a, e) =>
-            {
-                if (e.NewValue > e.OldValue)
-                {
-                    for (int i = e.OldValue; i < e.NewValue; i++)
-                    {
-                        semaphore.Grant();
-                    }
-                }
-                else
-                {
-                    for (int i = e.NewValue; i < e.OldValue; i++)
-                    {
-                        semaphore.Revoke();
-                    }
-                }
-            };
+            this.Settings.MaxInflightSends.Changing += (a, e) => AdjustSemaphore(e, semaphore);
             var sw = Stopwatch.StartNew();
 
             // first send will fail out if the cxn string is bad
@@ -136,6 +120,24 @@ namespace ServiceBusPerfSample
                 }
             }
             await done.WaitAsync();
+        }
+
+        static void AdjustSemaphore(Observable<int>.ChangingEventArgs e, DynamicSemaphoreSlim semaphore)
+        {
+            if (e.NewValue > e.OldValue)
+            {
+                for (int i = e.OldValue; i < e.NewValue; i++)
+                {
+                    semaphore.Grant();
+                }
+            }
+            else
+            {
+                for (int i = e.NewValue; i < e.OldValue; i++)
+                {
+                    semaphore.Revoke();
+                }
+            }
         }
 
         private async Task HandleExceptions(DynamicSemaphoreSlim semaphore, SendMetrics sendMetrics, AggregateException ex)

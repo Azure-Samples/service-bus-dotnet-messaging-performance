@@ -8,9 +8,6 @@
 
 namespace ServiceBusPerfSample
 {
-    using System;
-    using System.Threading;
-
     sealed class SendMetrics
     {
         public long Tick { get; set; }

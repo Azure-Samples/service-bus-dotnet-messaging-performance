@@ -11,6 +11,7 @@ namespace ServiceBusPerfSample
     using LinqStatistics;
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Linq;
     using System.Reactive.Linq;
     using System.Threading;
@@ -24,6 +25,7 @@ namespace ServiceBusPerfSample
         readonly List<PerformanceTask> tasks;
         private IDisposable sendMetrics;
         private IDisposable receiveMetrics;
+        private Stopwatch sw;
 
         public ServiceBusPerformanceApp(Settings settings, Metrics metrics)
         {
@@ -31,6 +33,7 @@ namespace ServiceBusPerfSample
             this.metrics = metrics;
             this.cancellationTokenSource = new CancellationTokenSource();
             this.tasks = new List<PerformanceTask>();
+            this.sw = Stopwatch.StartNew();
         }
 
 
@@ -43,22 +46,19 @@ namespace ServiceBusPerfSample
 
             Console.WriteLine("Starting...");
             Console.WriteLine();
+            long sndprev = sw.ElapsedMilliseconds, rcvprev = sw.ElapsedMilliseconds;
 
             long sendTotal = 0, receiveTotal = 0;
             int windowLengthSecs = (int)this.settings.MetricsDisplayFrequency.TotalSeconds;
             if (this.settings.SenderCount > 0)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.Write("S|{0,10}|{1,10}|{2,5}|{3,5}|", "pstart", "pend", "sbc", "mifs");
+                Console.Write("S|{0,10:0.00}|{1,10:0.00}|{2,5}|{3,5}|", "pstart", "pend", "sbc", "mifs");
                 Console.Write("{0,10:0.00}|{1,10:0.00}|{2,10:0.00}|{3,10:0.00}|{4,10:0.00}|", "snd.avg", "snd.med", "snd.dev", "snd.min", "snd.max");
                 Console.Write("{0,10:0.00}|{1,10:0.00}|{2,10:0.00}|{3,10:0.00}|{4,10:0.00}|", "gld.avg", "gld.med", "gld.dev", "gld.min", "gld.max");
-                Console.Write("{0,10:0.00}|", "msg/s");
-                Console.Write("{0,10}|", "total");
-                Console.Write("{0,10}|", "sndop");
-                Console.Write("{0,10}|", "errs");
-                Console.WriteLine("{0,10}|{1,10}|", "busy", "overall");
+                Console.WriteLine("{0,10}|{1,10}|{2,10}|{3,10}|{4,10}|{5,10}|", "msg/s", "total", "sndop", "errs", "busy", "overall");
                 this.sendMetrics = ((IObservable<SendMetrics>)metrics)
-                .Buffer(TimeSpan.FromSeconds(windowLengthSecs), TimeSpan.FromSeconds(windowLengthSecs / 2))
+                .Buffer(TimeSpan.FromSeconds(windowLengthSecs), TimeSpan.FromSeconds(windowLengthSecs))
                 .Subscribe((list) =>
                 {
                     if (list.Count == 0)
@@ -66,34 +66,26 @@ namespace ServiceBusPerfSample
                     lock (Console.Out)
                     {
                         Console.ForegroundColor = ConsoleColor.Yellow;
-                        Console.Write("S|{0,10:0.00}|{1,10:0.00}|{2,5}|{3,5}|", list.Min(i => i.Tick) / 1000.0, list.Max(i => i.Tick) / 1000.0, this.settings.SendBatchCount, this.settings.MaxInflightSends.Value);
+                        Console.Write("S|{0,10}|{1,10}|{2,5}|{3,5}|", sndprev / 1000, sw.ElapsedMilliseconds / 1000, this.settings.SendBatchCount, this.settings.MaxInflightSends.Value);
                         WriteStat(list, i => i.SendDuration100ns, 10000.0);
                         WriteStat(list, i => i.GateLockDuration100ns, 10000.0);
-                        Console.Write("{0,10:0.00}|", list.Sum(i => i.Messages) / (double)windowLengthSecs);
                         var msgs = list.Sum(i => i.Messages);
                         sendTotal += msgs;
-                        Console.Write("{0,10}|", msgs);
-                        Console.Write("{0,10}|", list.Sum(i => i.Sends));
-                        Console.Write("{0,10}|", list.Sum(i => i.Errors));
-                        Console.Write("{0,10}|", list.Sum(i => i.BusyErrors));
-                        Console.WriteLine("{0,10}|", sendTotal);
+                        Console.WriteLine("{0,10:0.00}|{1,10}|{2,10}|{3,10}|{4,10}|{5,10}|", list.Sum(i => i.Messages) / (double)windowLengthSecs, msgs, list.Sum(i => i.Sends), list.Sum(i => i.Errors), list.Sum(i => i.BusyErrors), sendTotal);
                     }
+                    sndprev = sw.ElapsedMilliseconds;
                 });
             }
             if (this.settings.ReceiverCount > 0)
             {
                 Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.Write("R|{0,10}|{1,10}|{2,5}|{3,5}|", "pstart", "pend", "rbc", "mifr");
+                Console.Write("R|{0,10:0.00}|{1,10:0.00}|{2,5}|{3,5}|", "pstart", "pend", "rbc", "mifr");
                 Console.Write("{0,10:0.00}|{1,10:0.00}|{2,10:0.00}|{3,10:0.00}|{4,10:0.00}|", "rcv.avg", "rcv.med", "rcv.dev", "rcv.min", "rcv.max");
                 Console.Write("{0,10:0.00}|{1,10:0.00}|{2,10:0.00}|{3,10:0.00}|{4,10:0.00}|", "cpl.avg", "cpl.med", "cpl.dev", "cpl.min", "cpl.max");
-                Console.Write("{0,10:0.00}|", "msg/s");
-                Console.Write("{0,10}|", "total");
-                Console.Write("{0,10}|", "rcvop");
-                Console.Write("{0,10}|", "errs");
-                Console.WriteLine("{0,10}|{1,10}|", "busy", "overall");
+                Console.WriteLine("{0,10}|{1,10}|{2,10}|{3,10}|{4,10}|{5,10}|", "msg/s", "total", "rcvop", "errs", "busy", "overall");
 
                 this.receiveMetrics = ((IObservable<ReceiveMetrics>)metrics)
-                     .Buffer(TimeSpan.FromSeconds(windowLengthSecs), TimeSpan.FromSeconds(windowLengthSecs / 2))
+                     .Buffer(TimeSpan.FromSeconds(windowLengthSecs), TimeSpan.FromSeconds(windowLengthSecs))
                     .Subscribe((list) =>
                     {
                         if (list.Count == 0)
@@ -101,18 +93,14 @@ namespace ServiceBusPerfSample
                         lock (Console.Out)
                         {
                             Console.ForegroundColor = ConsoleColor.Cyan;
-                            Console.Write("R|{0,10:0.00}|{1,10:0.00}|{2,5}|{3,5}|", list.Min(i => i.Tick) / 1000.0, list.Max(i => i.Tick) / 1000.0, this.settings.ReceiveBatchCount, this.settings.MaxInflightReceives);
+                            Console.Write("R|{0,10}|{1,10}|{2,5}|{3,5}|", rcvprev / 1000, sw.ElapsedMilliseconds / 1000, this.settings.ReceiveBatchCount, this.settings.MaxInflightReceives.Value);
                             WriteStat(list, i => i.ReceiveDuration100ns, 10000.0);
                             WriteStat(list, i => i.CompleteDuration100ns, 10000.0);
-                            Console.Write("{0,10:0.00}|", list.Sum(i => i.Messages) / (double)windowLengthSecs);
                             var msgs = list.Sum(i => i.Messages);
                             receiveTotal += msgs;
-                            Console.Write("{0,10}|", msgs);
-                            Console.Write("{0,10}|", list.Sum(i => i.Receives));
-                            Console.Write("{0,10}|", list.Sum(i => i.Errors));
-                            Console.Write("{0,10}|", list.Sum(i => i.BusyErrors));
-                            Console.WriteLine("{0,10}|", receiveTotal);
+                            Console.WriteLine("{0,10:0.00}|{1,10}|{2,10}|{3,10}|{4,10}|{5,10}|", list.Sum(i => i.Messages) / (double)windowLengthSecs, msgs, list.Sum(i => i.Receives), list.Sum(i => i.Errors), list.Sum(i => i.BusyErrors), receiveTotal);
                         }
+                        rcvprev = sw.ElapsedMilliseconds;
                     });
             }
 
@@ -135,26 +123,20 @@ namespace ServiceBusPerfSample
         {
             return Task.Run(async () =>
             {
-                do
+                foreach (var experiment in experiments)
                 {
-                    foreach (var experiment in experiments)
-                    {
-                        await StartExperiment(experiment).ConfigureAwait(false);
-                    }
+                    await Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith((t) => StartExperiment(experiment)).ConfigureAwait(false);
                 }
-                while (!ct.IsCancellationRequested);
             });
         }
 
         private Task StartExperiment(Experiment experiment)
         {
-            Console.WriteLine("--- Starting experiment:", experiment.ToString());
             return experiment.Run().ContinueWith(t =>
              {
-                 Console.WriteLine("--- Completed experiment:", experiment.ToString());
                  if (t.Result != null)
                  {
-                     return Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(t1 => StartExperiment(t.Result));
+                     return Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith(t1 => StartExperiment(t.Result));
                  }
                  return Task.CompletedTask;
              });

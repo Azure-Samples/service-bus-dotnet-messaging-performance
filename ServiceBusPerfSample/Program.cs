@@ -52,8 +52,12 @@ namespace ServiceBusPerfSample
             Console.WriteLine("\n\nPress <ENTER> to STOP at anytime\n");
             Metrics metrics = new Metrics(settings);
             ServiceBusPerformanceApp app = new ServiceBusPerformanceApp(settings, metrics);
-            var experiment = new IncreaseInflightSendsExperiment(10, metrics, settings);
-            app.Run(experiment).Wait();
+            var experiments = new Experiment[]
+            {
+                // new IncreaseInflightSendsExperiment(50, metrics, settings),
+                // new IncreaseInflightReceivesExperiment(10, metrics, settings)
+            };
+            app.Run(experiments).Wait();
             Console.WriteLine("Complete");
             
         }

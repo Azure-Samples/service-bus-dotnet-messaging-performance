@@ -8,7 +8,6 @@
 
 namespace ServiceBusPerfSample
 {
-    using LinqStatistics;
     using System.Threading.Tasks;
 
     abstract class Experiment

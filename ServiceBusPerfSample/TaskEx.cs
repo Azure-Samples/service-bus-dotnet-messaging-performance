@@ -13,7 +13,7 @@ namespace ServiceBusPerfSample
     using System.Threading;
     using System.Threading.Tasks;
 
-    static class Extensions
+    static class TaskEx
     {
         public static Task ParallelForEachAsync<TSource>(this IEnumerable<TSource> source, Func<TSource, Task> action)
         {

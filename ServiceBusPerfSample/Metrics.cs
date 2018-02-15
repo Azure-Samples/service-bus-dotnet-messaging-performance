@@ -19,19 +19,15 @@ namespace ServiceBusPerfSample
         List<IObserver<SendMetrics>> sendMetricsObservers = new List<IObserver<SendMetrics>>();
         object receiveMetricsObserverLock = new object();
         List<IObserver<ReceiveMetrics>> receiveMetricsObservers = new List<IObserver<ReceiveMetrics>>();
-        private Stopwatch stopwatch;
-
+     
         public Metrics(Settings settings)
         {
-            this.stopwatch = Stopwatch.StartNew();
         }
         
         public void PushSendMetrics(SendMetrics sendMetrics)
         {
             Task.Run(() =>
             {
-                sendMetrics.Tick = stopwatch.ElapsedMilliseconds;
-
                 IObserver<SendMetrics>[] observers;
                 lock (sendMetricsObserverLock)
                 {
@@ -49,7 +45,6 @@ namespace ServiceBusPerfSample
         {
             Task.Run(() =>
             {
-                receiveMetrics.Tick = stopwatch.ElapsedMilliseconds;
                 IObserver<ReceiveMetrics>[] observers;
                 lock (receiveMetricsObserverLock)
                 {

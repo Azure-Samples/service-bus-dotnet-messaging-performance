@@ -35,13 +35,13 @@ namespace ServiceBusPerfSample
         public TimeSpan MetricsDisplayFrequency { get; set; } = TimeSpan.FromSeconds(10);
 
         [Option('m', "receive-mode", Required = false, HelpText = "Receive mode.'PeekLock' (default) or 'ReceiveAndDelete'")]
-        public ReceiveMode ReceiveMode { get; set; } = ReceiveMode.ReceiveAndDelete;
+        public ReceiveMode ReceiveMode { get; set; } = ReceiveMode.PeekLock;
 
         [Option('r', "receiver-count", Required = false, HelpText = "Number of concurrent receivers (default 1)")]
-        public int ReceiverCount { get; set; } = 1;
+        public int ReceiverCount { get; set; } = 5;
 
         [Option('e', "prefetch-count", Required = false, HelpText = "Prefetch count (default 0)")]
-        public int PrefetchCount { get; set; } = 0;
+        public int PrefetchCount { get; set; } = 100;
 
         [Option('t', "send-batch-count", Required = false, HelpText = "Number of messages per batch (default 0, no batching)")]
         public int SendBatchCount { get; set; } = 0;
@@ -49,16 +49,20 @@ namespace ServiceBusPerfSample
         [Option('s', "sender-count", Required = false, HelpText = "Number of concurrent senders (default 1)")]
         public int SenderCount { get; set; } = 1;
 
-        [Option('i', "inflight-sends", Required = false, HelpText = "Maximum numbers of concurrent in-flight send operations (default 10)")]
-        public int CmdlineMaxInflightSends { get { return MaxInflightSends.Value; } set { MaxInflightSends = new Observable<int>(value); } }
+        [Option('i', "inflight-sends", Required = false, HelpText = "Maximum numbers of concurrent in-flight send operations (default 1)")]
+        public int CfgMaxInflightSends { get { return MaxInflightSends.Value; } set { MaxInflightSends = new Observable<int>(value); } }
 
-        public Observable<int> MaxInflightSends { get; internal set; } = new Observable<int>(100);
+        public Observable<int> MaxInflightSends { get; internal set; } = new Observable<int>(1);
 
         [Option('j', "inflight-receives", Required = false, HelpText = "Maximum number of concurrent in-flight receive operations per receiver (default 1)")]
-        public int MaxInflightReceives { get; internal set; } = 1;
+        public int CfgMaxInflightReceives { get { return MaxInflightReceives.Value; } set { MaxInflightReceives = new Observable<int>(value); } }
+        public Observable<int> MaxInflightReceives { get; internal set; } = new Observable<int>(1);
 
         [Option('v', "receive-batch-count", Required = false, HelpText = "Max number of messages per batch (default 0, no batching)")]
         public int ReceiveBatchCount { get; private set; } = 0;
+
+        [Option('w', "receive-work-duration", Required = false, HelpText = "Work simulation delay between receive and completion (milliseconds, default 0, no work)")]
+        public int WorkDuration { get; private set; } = 0;
 
         public void PrintSettings()
         {
@@ -69,11 +73,15 @@ namespace ServiceBusPerfSample
             Console.WriteLine("{0}: {1}", "MessageSizeInBytes", this.MessageSizeInBytes);
             Console.WriteLine("{0}: {1}", "SenderCount", this.SenderCount);
             Console.WriteLine("{0}: {1}", "SendBatchCount", this.SendBatchCount);
+            Console.WriteLine("{0}: {1}", "MaxInflightSends", this.CfgMaxInflightSends);
             Console.WriteLine("{0}: {1}", "ReceiveMode", this.ReceiveMode);
             Console.WriteLine("{0}: {1}", "ReceiverCount", this.ReceiverCount);
             Console.WriteLine("{0}: {1}", "ReceiveBatchCount", this.ReceiveBatchCount);
             Console.WriteLine("{0}: {1}", "ReceiveMode", this.ReceiveMode);
+            Console.WriteLine("{0}: {1}", "MaxInflightReceives", this.CfgMaxInflightReceives);
             Console.WriteLine("{0}: {1}", "MetricsDisplayFrequency", this.MetricsDisplayFrequency);
+            Console.WriteLine("{0}: {1}", "WorkDuration", this.WorkDuration);
+
             Console.WriteLine();
         }
 
