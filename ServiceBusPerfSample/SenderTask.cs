@@ -63,10 +63,15 @@ namespace ServiceBusPerfSample
                 var sendMetrics = new SendMetrics() { Tick = sw.ElapsedTicks };
 
                 var nsec = sw.ElapsedTicks;
-                await semaphore.WaitAsync().ConfigureAwait(false);
+                semaphore.Wait();
+                //await semaphore.WaitAsync().ConfigureAwait(false);
                 sendMetrics.InflightSends = this.Settings.MaxInflightSends.Value - semaphore.CurrentCount;
-                sendMetrics.GateLockDuration100ns = sw.ElapsedTicks - nsec;
-
+                sendMetrics.GateLockDuration100ns = sw.ElapsedTicks - nsec; 
+                                
+                if (Settings.SendDelay > 0)
+                {
+                    await Task.Delay(Settings.SendDelay);
+                }
                 if (Settings.SendBatchCount <= 1)
                 {
                     sender.SendAsync(new Message(payload) { TimeToLive = TimeSpan.FromMinutes(5) })

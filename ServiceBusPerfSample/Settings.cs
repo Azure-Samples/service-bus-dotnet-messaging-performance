@@ -31,8 +31,8 @@ namespace ServiceBusPerfSample
         [Option('b', "message-size-bytes", Required = false, HelpText = "Bytes per message (default 1024)")]
         public int MessageSizeInBytes { get; set; } = 1024;
 
-        [Option('f', "frequency-metrics", Required = false, HelpText = "Frequency of metrics display (default 10s)")]
-        public TimeSpan MetricsDisplayFrequency { get; set; } = TimeSpan.FromSeconds(10);
+        [Option('f', "frequency-metrics", Required = false, HelpText = "Frequency of metrics display (seconds, default 10s)")]
+        public int MetricsDisplayFrequency { get; set; } = 10;
 
         [Option('m', "receive-mode", Required = false, HelpText = "Receive mode.'PeekLock' (default) or 'ReceiveAndDelete'")]
         public ReceiveMode ReceiveMode { get; set; } = ReceiveMode.PeekLock;
@@ -48,6 +48,9 @@ namespace ServiceBusPerfSample
 
         [Option('s', "sender-count", Required = false, HelpText = "Number of concurrent senders (default 1)")]
         public int SenderCount { get; set; } = 1;
+
+        [Option('d', "send-delay", Required = false, HelpText = "Delay between sends of any sender (milliseconds, default 0)")]
+        public int SendDelay { get; private set; } = 0;
 
         [Option('i', "inflight-sends", Required = false, HelpText = "Maximum numbers of concurrent in-flight send operations (default 1)")]
         public int CfgMaxInflightSends { get { return MaxInflightSends.Value; } set { MaxInflightSends = new Observable<int>(value); } }

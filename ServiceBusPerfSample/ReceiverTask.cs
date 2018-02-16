@@ -67,7 +67,8 @@ namespace ServiceBusPerfSample
                 if (Settings.ReceiveBatchCount <= 1)
                 {
                     nsec = sw.ElapsedTicks;
-                    receiver.ReceiveAsync().ContinueWith(async (t) =>
+                    // we're going to unblock the receives after 10 seconds if there's no pending message
+                    receiver.ReceiveAsync(TimeSpan.FromSeconds(10)).ContinueWith(async (t) =>
                     {
                         receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
                         if (t.IsFaulted)
@@ -138,7 +139,8 @@ namespace ServiceBusPerfSample
                 else
                 {
                     nsec = sw.ElapsedTicks;
-                    receiver.ReceiveAsync(Settings.ReceiveBatchCount).ContinueWith(async (t) =>
+                    // we're going to unblock the receives after 10 seconds if there's no pending message
+                    receiver.ReceiveAsync(Settings.ReceiveBatchCount, TimeSpan.FromSeconds(10)).ContinueWith(async (t) =>
                     {
                         receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
                         if (t.IsFaulted || t.IsCanceled || t.Result == null)

@@ -49,7 +49,7 @@ namespace ServiceBusPerfSample
             long sndprev = sw.ElapsedMilliseconds, rcvprev = sw.ElapsedMilliseconds;
 
             long sendTotal = 0, receiveTotal = 0;
-            int windowLengthSecs = (int)this.settings.MetricsDisplayFrequency.TotalSeconds;
+            int windowLengthSecs = (int)this.settings.MetricsDisplayFrequency;
             if (this.settings.SenderCount > 0)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
@@ -67,8 +67,8 @@ namespace ServiceBusPerfSample
                     {
                         Console.ForegroundColor = ConsoleColor.Yellow;
                         Console.Write("S|{0,10}|{1,10}|{2,5}|{3,5}|", sndprev / 1000, sw.ElapsedMilliseconds / 1000, this.settings.SendBatchCount, this.settings.MaxInflightSends.Value);
-                        WriteStat(list, i => i.SendDuration100ns, 10000.0);
-                        WriteStat(list, i => i.GateLockDuration100ns, 10000.0);
+                        WriteStat(list, i => i.SendDuration100ns, Stopwatch.Frequency / 1000.0);
+                        WriteStat(list, i => i.GateLockDuration100ns, Stopwatch.Frequency / 10000.0);
                         var msgs = list.Sum(i => i.Messages);
                         sendTotal += msgs;
                         Console.WriteLine("{0,10:0.00}|{1,10}|{2,10}|{3,10}|{4,10}|{5,10}|", list.Sum(i => i.Messages) / (double)windowLengthSecs, msgs, list.Sum(i => i.Sends), list.Sum(i => i.Errors), list.Sum(i => i.BusyErrors), sendTotal);
@@ -94,8 +94,8 @@ namespace ServiceBusPerfSample
                         {
                             Console.ForegroundColor = ConsoleColor.Cyan;
                             Console.Write("R|{0,10}|{1,10}|{2,5}|{3,5}|", rcvprev / 1000, sw.ElapsedMilliseconds / 1000, this.settings.ReceiveBatchCount, this.settings.MaxInflightReceives.Value);
-                            WriteStat(list, i => i.ReceiveDuration100ns, 10000.0);
-                            WriteStat(list, i => i.CompleteDuration100ns, 10000.0);
+                            WriteStat(list, i => i.ReceiveDuration100ns, Stopwatch.Frequency / 1000.0);
+                            WriteStat(list, i => i.CompleteDuration100ns, Stopwatch.Frequency / 1000.0);
                             var msgs = list.Sum(i => i.Messages);
                             receiveTotal += msgs;
                             Console.WriteLine("{0,10:0.00}|{1,10}|{2,10}|{3,10}|{4,10}|{5,10}|", list.Sum(i => i.Messages) / (double)windowLengthSecs, msgs, list.Sum(i => i.Receives), list.Sum(i => i.Errors), list.Sum(i => i.BusyErrors), receiveTotal);

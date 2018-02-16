@@ -1,8 +1,7 @@
 {
   "profiles": {
     "ServiceBusPerfSample": {
-      "commandName": "Project",
-      "commandLineArgs": "-C Endpoint=sb://cvtest93.servicebus.windows.net/;SharedAccessKeyName=Manage;SharedAccessKey=P+ejuyCWYcIaoLTZUh9QNYIKYyvpDiiRztZO1P5D95Q=;EntityPath=basicqueue -s 1 -r 5 -i 190"
+      "commandName": "Project"
     }
   }
 }
