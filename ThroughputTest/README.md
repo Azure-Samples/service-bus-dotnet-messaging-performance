@@ -82,6 +82,65 @@ on the same entity. You can also receive from dead-letter queues.
 | Send to and receive from a queue |```ThroughputTest -C {connection-string} -S myQueueName ```          |
 | Send to a topic and receive from a subscription | ``` ThroughputTest -C {connection-string} -S myTopicName -R myTopicName/subscriptions/mySubName ``` |
 | Send to a topic and receive from two subscriptions | ``` ThroughputTest -C {connection-string} -S myTopicName -R myTopicName/subscriptions/mySubNameA myTopicName/subscriptions/mySubNameB ``` |
+| Send a queue |```ThroughputTest -C {connection-string} -S myQueueName -r 0 ```          |
+| Receive from a queue |```ThroughputTest -C {connection-string} -S myQueueName -s 0 ```          |
+
+## Output
+
+The tool prints out interleaved statistics for sends and receives. Send information is prefixed with S (and in yellow),
+receive information is prefixed with R and printed in cyan. The columns are separated with the pipe symbol and therefore
+parseable. 
+
+### Send output columns
+
+| Column   | Description
+|----------|---------------------------------------------------------------------------
+| pstart   | Begin of the data recording for this row (seconds from start of run)
+| pend     | End of data recording for this row
+| sbc      | Send batch count
+| mifs     | Max inflight sends
+| snd.avg  | Average send duration (to acknowledgement receipt) in milliseconds
+| snd.med  | Median send duration
+| snd.dev  | Standard deviation for send duration
+| snd.min  | Minimum send duration
+| snd.max  | Maximum send duration
+| gld.avg  | Average gate lock duration in milliseconds. This measure tracks whether the internal async thread pool queue gets backed up. If this value shoots up, you should reduce the number of concurrent inflight sends, because the application sends more than what can be put on the wire. 
+| gld.med  | Median gate lock duration
+| gld.dev  | Standard deviation for gate lock duration
+| gld.min  | Minimum gate lock duration
+| gld.max  | Maximum gate lock duration
+| msg/s    | Throughput in messages per second 
+| total    | Total messages sent in this period
+| sndop    | Total send operations in this period 
+| errs     | Errors
+| busy     | Busy errors
+| overall  | Total messages sent in this run
+
+### Receive output columns 
+
+| Column   | Description
+|----------|---------------------------------------------------------------------------
+| pstart   | Begin of the data recording for this row (seconds from start of run)
+| pend     | End of data recording for this row
+| rbc      | Receive batch count
+| mifr     | Max inflight receives
+| rcv.avg  | Average receive duration (to message receipt) in milliseconds
+| rcv.med  | Median receive duration
+| rcv.dev  | Standard deviation for receive duration
+| rcv.min  | Minimum receive duration
+| rcv.max  | Maximum receive duration
+| cpl.avg  | Average completion duration in milliseconds. 
+| cpl.med  | Median completion duration
+| cpl.dev  | Standard deviation for completion duration
+| cpl.min  | Minimum completion duration
+| cpl.max  | Maximum completion duration
+| msg/s    | Throughput in messages per second 
+| total    | Total messages received in this period
+| rcvop    | Total receive operations in this period 
+| errs     | Errors
+| busy     | Busy errors
+| overall  | Total messages sent in this run
+
 
 ## Options 
 
