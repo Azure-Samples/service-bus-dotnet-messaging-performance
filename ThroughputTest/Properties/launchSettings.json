@@ -2,7 +2,7 @@
   "profiles": {
     "ServiceBusPerfSample": {
       "commandName": "Project",
-      "commandLineArgs": "-C \"Endpoint=sb://cvtest93.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=TEezFCPeEzvUclPrT6jeACzVj2yrRRindQ1rj/bjOt0=\" -S basictopic -R basictopic/subscriptions/basicsubscription basictopic/subscriptions/basicsubscription2 -s 0 -r 1"
+      commandLineArgs": ""
     }
   }
 }
