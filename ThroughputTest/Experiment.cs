@@ -6,7 +6,7 @@
 // OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
 //---------------------------------------------------------------------------------
 
-namespace ServiceBusPerfSample
+namespace ThroughputTest
 {
     using System.Threading.Tasks;
 

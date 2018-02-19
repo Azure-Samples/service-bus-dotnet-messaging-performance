@@ -6,7 +6,7 @@
 // OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
 //---------------------------------------------------------------------------------
 
-namespace ServiceBusPerfSample
+namespace ThroughputTest
 {
     using Microsoft.Azure.ServiceBus;
     using Microsoft.Azure.ServiceBus.Core;
@@ -71,7 +71,7 @@ namespace ServiceBusPerfSample
                     receiver.ReceiveAsync(TimeSpan.FromSeconds(10)).ContinueWith(async (t) =>
                     {
                         receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
-                        if (t.IsFaulted)
+                        if (t.IsFaulted || t.IsCanceled || t.Result == null)
                         {
                             if (t.Exception?.GetType() == typeof(ServerBusyException))
                             {
@@ -92,7 +92,7 @@ namespace ServiceBusPerfSample
                                 done.Release();
                             }
                         }
-                        else if ( t.Result != null )
+                        else 
                         {
                             receiveMetrics.Receives = receiveMetrics.Messages = 1;
                             nsec = sw.ElapsedTicks;
@@ -102,7 +102,6 @@ namespace ServiceBusPerfSample
                             {
                                 await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
                             }
-
                             receiver.CompleteAsync(t.Result.SystemProperties.LockToken).ContinueWith(async (t1) =>
                             {
                                 receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
