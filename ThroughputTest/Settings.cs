@@ -70,20 +70,20 @@ namespace ThroughputTest
         public void PrintSettings()
         {
             Console.WriteLine("Settings:");
-            Console.WriteLine("{0}: {1}", "ReceivePaths", string.Join(",", this.ReceivePaths));
-            Console.WriteLine("{0}: {1}", "SendPaths", this.SendPath);
-            Console.WriteLine("{0}: {1}", "MessageCount", this.MessageCount);
-            Console.WriteLine("{0}: {1}", "MessageSizeInBytes", this.MessageSizeInBytes);
-            Console.WriteLine("{0}: {1}", "SenderCount", this.SenderCount);
-            Console.WriteLine("{0}: {1}", "SendBatchCount", this.SendBatchCount);
-            Console.WriteLine("{0}: {1}", "MaxInflightSends", this.CfgMaxInflightSends);
-            Console.WriteLine("{0}: {1}", "ReceiveMode", this.ReceiveMode);
-            Console.WriteLine("{0}: {1}", "ReceiverCount", this.ReceiverCount);
-            Console.WriteLine("{0}: {1}", "ReceiveBatchCount", this.ReceiveBatchCount);
-            Console.WriteLine("{0}: {1}", "ReceiveMode", this.ReceiveMode);
-            Console.WriteLine("{0}: {1}", "MaxInflightReceives", this.CfgMaxInflightReceives);
-            Console.WriteLine("{0}: {1}", "MetricsDisplayFrequency", this.MetricsDisplayFrequency);
-            Console.WriteLine("{0}: {1}", "WorkDuration", this.WorkDuration);
+            Console.WriteLine("{0}: {1}", nameof(ReceivePaths), string.Join(",", this.ReceivePaths));
+            Console.WriteLine("{0}: {1}", nameof(SendPath), this.SendPath);
+            Console.WriteLine("{0}: {1}", nameof(MessageCount), this.MessageCount);
+            Console.WriteLine("{0}: {1}", nameof(MessageSizeInBytes), this.MessageSizeInBytes);
+            Console.WriteLine("{0}: {1}", nameof(SenderCount), this.SenderCount);
+            Console.WriteLine("{0}: {1}", nameof(SendBatchCount), this.SendBatchCount);
+            Console.WriteLine("{0}: {1}", nameof(MaxInflightSends), this.CfgMaxInflightSends);
+            Console.WriteLine("{0}: {1}", nameof(ReceiveMode), this.ReceiveMode);
+            Console.WriteLine("{0}: {1}", nameof(ReceiverCount), this.ReceiverCount);
+            Console.WriteLine("{0}: {1}", nameof(ReceiveBatchCount), this.ReceiveBatchCount);
+            Console.WriteLine("{0}: {1}", nameof(ReceiveMode), this.ReceiveMode);
+            Console.WriteLine("{0}: {1}", nameof(MaxInflightReceives), this.CfgMaxInflightReceives);
+            Console.WriteLine("{0}: {1}", nameof(MetricsDisplayFrequency), this.MetricsDisplayFrequency);
+            Console.WriteLine("{0}: {1}", nameof(WorkDuration), this.WorkDuration);
 
             Console.WriteLine();
         }
