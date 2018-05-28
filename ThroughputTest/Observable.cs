@@ -74,21 +74,13 @@ namespace ThroughputTest
         protected virtual void OnChanging(ChangingEventArgs e)
         {
             EventHandler<ChangingEventArgs> handler = Changing;
-            if (handler == null)
-            {
-                return;
-            }
-            handler(this, e);
+            handler?.Invoke(this, e);
         }
 
         protected virtual void OnChanged(ChangedEventArgs e)
         {
             EventHandler<ChangedEventArgs> handler = Changed;
-            if (handler == null)
-            {
-                return;
-            }
-            handler(this, e);
+            handler?.Invoke(this, e);
         }
     }
 }
