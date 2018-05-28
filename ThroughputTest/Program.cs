@@ -12,18 +12,31 @@ namespace ThroughputTest
     using Microsoft.Azure.ServiceBus;
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Linq;
 
     class Program
     {
         static int result = 0;
+
         static int Main(params string[] args)
         {
             CommandLine.Parser.Default.ParseArguments<Settings>(args)
-                 .WithParsed<Settings>(opts => RunOptionsAndReturnExitCode(opts));
+                .WithParsed<Settings>(opts => RunOptionsAndReturnExitCode(opts))
+                .WithNotParsed(errors => NoSettingsProvided());
+
             return result;
         }
-        
+
+        private static void NoSettingsProvided()
+        {
+            if (Debugger.IsAttached)
+            {
+                Console.WriteLine("Press <ENTER> to exit");
+                Console.ReadLine();
+            }
+        }
+
         static void RunOptionsAndReturnExitCode(Settings settings)
         {
             ServiceBusConnectionStringBuilder cb = new ServiceBusConnectionStringBuilder(settings.ConnectionString);
@@ -59,7 +72,6 @@ namespace ThroughputTest
             };
             app.Run(experiments).Wait();
             Console.WriteLine("Complete");
-            
         }
     }
 }
