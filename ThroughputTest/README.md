@@ -35,7 +35,7 @@ As discussed in the [product documentation](https://docs.microsoft.com/azure/ser
 network latency has very significant impact on the achievable throughput. If you are running this sample from your
 development workstation, throughput will be substantially lower than from within an Azure VM. If you want to 
 test limits for a scenario where the Service Bus client will reside inside Azure, you should also run this test 
-inside Azure on a Windows or Linux VM that resiodes within the same region as the Service Bus namespace you 
+inside Azure on a Windows or Linux VM that resides within the same region as the Service Bus namespace you 
 want to test.
 
 In an in-region setup, and with ideal parameters, you can achieve send rates exceeding 20000 msg/sec at 1024 bytes per message
