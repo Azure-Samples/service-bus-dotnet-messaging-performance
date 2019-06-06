@@ -48,19 +48,19 @@ able to keep up.
 
 The tool is a .NET Core project that can produce standalone executables for Linux and Windows, whereby we'll assume x64 targets. 
 
-For Linux, with the .NET Core 2.0 SDK installed, run: 
+For Linux, with the .NET Core 3.0 SDK installed, run: 
 
 ```
-	dotnet publish -c Release -f netcoreapp2.0 -r linux-x64
+	dotnet publish -c Release -f netcoreapp3.0 -r linux-x64
 ```
-The output application can be found in the ```bin/Release/netcoreapp2.0/linux-x64/publish```subdirectory.
+The output application can be found in the ```bin/Release/netcoreapp3.0/linux-x64/publish```subdirectory.
 
 For Windows, run:
 
 ```
-	dotnet publish -c Release -f netcoreapp2.0 -r win-x64
+	dotnet publish -c Release -f netcoreapp3.0 -r win-x64
 ```
-The output application can be found in the ```bin\Release\netcoreapp2.0\win-x64\publish```subdirectory.
+The output application can be found in the ```bin\Release\netcoreapp3.0\win-x64\publish```subdirectory.
 
 ## Running the Tool
 

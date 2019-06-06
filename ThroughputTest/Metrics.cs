@@ -10,7 +10,6 @@ namespace ThroughputTest
 {
     using System;
     using System.Collections.Generic;
-    using System.Diagnostics;
     using System.Threading.Tasks;
 
     sealed class Metrics : IObservable<SendMetrics>, IObservable<ReceiveMetrics>

@@ -11,7 +11,6 @@ namespace ThroughputTest
     using CommandLine;
     using Microsoft.Azure.ServiceBus;
     using System;
-    using System.Collections.Generic;
     using System.Linq;
 
     class Program

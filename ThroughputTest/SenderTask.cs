@@ -11,13 +11,11 @@ namespace ThroughputTest
     using System;
     using System.Collections.Generic;
     using System.Diagnostics;
-    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.Azure.ServiceBus.Core;
     using Microsoft.Azure.ServiceBus;
     using System.Net.Sockets;
-    using System.Collections.Concurrent;
 
     sealed class SenderTask : PerformanceTask
     {
