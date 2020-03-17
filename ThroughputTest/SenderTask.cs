@@ -44,7 +44,8 @@ namespace ThroughputTest
         async Task SendTask()
         {
             var sender = new MessageSender(this.Settings.ConnectionString, this.Settings.SendPath, NoRetry.Default);
-            var payload = new byte[this.Settings.MessageSizeInBytes];
+            //var payload = new byte[this.Settings.MessageSizeInBytes];
+            var payload = new Enconding.UTF8.GetBytes(this.Settings.MessageJson);
             var semaphore = new DynamicSemaphoreSlim(this.Settings.MaxInflightSends.Value);
             var done = new SemaphoreSlim(1);
             done.Wait();
