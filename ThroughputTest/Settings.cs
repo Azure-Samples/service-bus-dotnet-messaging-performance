@@ -6,13 +6,14 @@
 // OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
 //---------------------------------------------------------------------------------
 
+using Azure.Messaging.ServiceBus;
+
 namespace ThroughputTest
 {
     using System;
     using System.Collections.Generic;
     using CommandLine;
     using CommandLine.Text;
-    using Microsoft.Azure.ServiceBus;
 
     class Settings
     {

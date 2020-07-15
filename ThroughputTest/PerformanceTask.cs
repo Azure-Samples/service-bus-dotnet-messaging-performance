@@ -51,7 +51,5 @@ namespace ThroughputTest
         protected abstract Task OnOpenAsync();
 
         protected abstract Task OnStartAsync();
-       
-        
     }
 }
