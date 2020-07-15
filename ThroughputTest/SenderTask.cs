@@ -6,6 +6,8 @@
 // OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
 //---------------------------------------------------------------------------------
 
+using Azure.Messaging.ServiceBus;
+
 namespace ThroughputTest
 {
     using System;
@@ -13,8 +15,6 @@ namespace ThroughputTest
     using System.Diagnostics;
     using System.Threading;
     using System.Threading.Tasks;
-    using Microsoft.Azure.ServiceBus.Core;
-    using Microsoft.Azure.ServiceBus;
     using System.Net.Sockets;
 
     sealed class SenderTask : PerformanceTask
@@ -43,7 +43,8 @@ namespace ThroughputTest
 
         async Task SendTask()
         {
-            var sender = new MessageSender(this.Settings.ConnectionString, this.Settings.SendPath, NoRetry.Default);
+            var client = new ServiceBusClient(Settings.ConnectionString, new ServiceBusClientOptions { RetryOptions = new ServiceBusRetryOptions { MaxRetries = 0 } });
+            var sender = client.CreateSender(Settings.SendPath);
             var payload = new byte[this.Settings.MessageSizeInBytes];
             var semaphore = new DynamicSemaphoreSlim(this.Settings.MaxInflightSends.Value);
             var done = new SemaphoreSlim(1);
@@ -54,7 +55,7 @@ namespace ThroughputTest
             var sw = Stopwatch.StartNew();
 
             // first send will fail out if the cxn string is bad
-            await sender.SendAsync(new Message(payload) { TimeToLive = TimeSpan.FromMinutes(5) });
+            await sender.SendMessageAsync(new ServiceBusMessage(payload) { TimeToLive = TimeSpan.FromMinutes(5) });
 
             for (int j = 0; j < Settings.MessageCount && !this.CancellationToken.IsCancellationRequested; j++)
             {
@@ -72,7 +73,7 @@ namespace ThroughputTest
                 }
                 if (Settings.SendBatchCount <= 1)
                 {
-                    sender.SendAsync(new Message(payload) { TimeToLive = TimeSpan.FromMinutes(5) })
+                    sender.SendMessageAsync(new ServiceBusMessage(payload) { TimeToLive = TimeSpan.FromMinutes(5) })
                         .ContinueWith(async (t) =>
                         {
                             if (t.IsFaulted || t.IsCanceled)
@@ -95,12 +96,12 @@ namespace ThroughputTest
                 }
                 else
                 {
-                    List<Message> batch = new List<Message>();
+                    List<ServiceBusMessage> batch = new List<ServiceBusMessage>();
                     for (int i = 0; i < Settings.SendBatchCount && j < Settings.MessageCount && !this.CancellationToken.IsCancellationRequested; i++, j++)
                     {
-                        batch.Add(new Message(payload) { TimeToLive = TimeSpan.FromMinutes(5) });
+                        batch.Add(new ServiceBusMessage(payload) { TimeToLive = TimeSpan.FromMinutes(5) });
                     }
-                    sender.SendAsync(batch)
+                    sender.SendMessagesAsync(batch)
                        .ContinueWith(async (t) =>
                        {
                            if (t.IsFaulted || t.IsCanceled)
@@ -123,6 +124,7 @@ namespace ThroughputTest
                 }
             }
             await done.WaitAsync();
+            await client.DisposeAsync();
         }
 
         static void AdjustSemaphore(Observable<int>.ChangingEventArgs e, DynamicSemaphoreSlim semaphore)
@@ -145,24 +147,25 @@ namespace ThroughputTest
 
         private async Task HandleExceptions(DynamicSemaphoreSlim semaphore, SendMetrics sendMetrics, AggregateException ex)
         {
-            bool wait = false;
+            var wait = false;
             ex.Handle((x) =>
             {
-                if (x is ServiceBusCommunicationException)
+                if (x is ServiceBusException exception)
                 {
-                    if (((ServiceBusCommunicationException)x).InnerException is SocketException &&
-                        ((SocketException)((ServiceBusCommunicationException)x).InnerException).SocketErrorCode == SocketError.HostNotFound)
+                    if (exception.Reason == ServiceBusException.FailureReason.ServiceCommunicationProblem
+                        && exception.InnerException is SocketException socketException
+                        && socketException.SocketErrorCode == SocketError.HostNotFound)
                     {
                         return false;
                     }
-                }
-
-                if (x is ServerBusyException)
-                {
-                    sendMetrics.BusyErrors = 1;
-                    if (!this.CancellationToken.IsCancellationRequested)
+                    
+                    if (exception.Reason == ServiceBusException.FailureReason.ServiceBusy)
                     {
-                        wait = true;
+                        sendMetrics.BusyErrors = 1;
+                        if (!this.CancellationToken.IsCancellationRequested)
+                        {
+                            wait = true;
+                        }
                     }
                 }
                 else
@@ -178,7 +181,6 @@ namespace ThroughputTest
             }
             semaphore.Release();
             Metrics.PushSendMetrics(sendMetrics);
-
         }
     }
 }

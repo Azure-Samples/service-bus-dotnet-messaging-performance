@@ -6,10 +6,10 @@
 // OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
 //---------------------------------------------------------------------------------
 
+using Azure.Messaging.ServiceBus;
+
 namespace ThroughputTest
 {
-    using Microsoft.Azure.ServiceBus;
-    using Microsoft.Azure.ServiceBus.Core;
     using System;
     using System.Collections.Generic;
     using System.Diagnostics;
@@ -47,10 +47,11 @@ namespace ThroughputTest
 
         async Task ReceiveTask(string path)
         {
-            var receiver = new MessageReceiver(this.Settings.ConnectionString, path, this.Settings.ReceiveMode);
-            receiver.PrefetchCount = Settings.PrefetchCount;
+            var client = new ServiceBusClient(Settings.ConnectionString);
+            var receiver = client.CreateReceiver(path, new ServiceBusReceiverOptions { ReceiveMode = Settings.ReceiveMode, PrefetchCount = Settings.PrefetchCount });
             var semaphore = new DynamicSemaphoreSlim(this.Settings.MaxInflightReceives.Value + 1);
-            var done = new SemaphoreSlim(1); done.Wait();
+            var done = new SemaphoreSlim(1);
+            done.Wait();
             var sw = Stopwatch.StartNew();
             long totalReceives = 0;
             await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
@@ -68,12 +69,12 @@ namespace ThroughputTest
                 {
                     nsec = sw.ElapsedTicks;
                     // we're going to unblock the receives after 10 seconds if there's no pending message
-                    receiver.ReceiveAsync(TimeSpan.FromSeconds(10)).ContinueWith(async (t) =>
+                    receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10)).ContinueWith(async t =>
                     {
                         receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
                         if (t.IsFaulted || t.IsCanceled || t.Result == null)
                         {
-                            if (t.Exception?.GetType() == typeof(ServerBusyException))
+                            if(t.Exception?.InnerException is ServiceBusException exception && exception.Reason == ServiceBusException.FailureReason.ServiceBusy)
                             {
                                 receiveMetrics.BusyErrors = 1;
                                 if (!this.CancellationToken.IsCancellationRequested)
@@ -102,12 +103,12 @@ namespace ThroughputTest
                             {
                                 await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
                             }
-                            receiver.CompleteAsync(t.Result.SystemProperties.LockToken).ContinueWith(async (t1) =>
+                            receiver.CompleteMessageAsync(t.Result.LockToken).ContinueWith(async t1 =>
                             {
                                 receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
                                 if (t1.IsFaulted)
                                 {
-                                    if (t1.Exception?.GetType() == typeof(ServerBusyException))
+                                    if(t1.Exception?.InnerException is ServiceBusException exception && exception.Reason == ServiceBusException.FailureReason.ServiceBusy)
                                     {
                                         receiveMetrics.BusyErrors = 1;
                                         if (!this.CancellationToken.IsCancellationRequested)
@@ -139,12 +140,12 @@ namespace ThroughputTest
                 {
                     nsec = sw.ElapsedTicks;
                     // we're going to unblock the receives after 10 seconds if there's no pending message
-                    receiver.ReceiveAsync(Settings.ReceiveBatchCount, TimeSpan.FromSeconds(10)).ContinueWith(async (t) =>
+                    receiver.ReceiveMessagesAsync(Settings.ReceiveBatchCount, TimeSpan.FromSeconds(10)).ContinueWith(async t =>
                     {
                         receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
                         if (t.IsFaulted || t.IsCanceled || t.Result == null)
                         {
-                            if (t.Exception?.GetType() == typeof(ServerBusyException))
+                            if(t.Exception?.InnerException is ServiceBusException exception && exception.Reason == ServiceBusException.FailureReason.ServiceBusy)
                             {
                                 receiveMetrics.BusyErrors = 1;
                                 if (!this.CancellationToken.IsCancellationRequested)
@@ -176,12 +177,12 @@ namespace ThroughputTest
                                     for (int i = 0; i < t.Result.Count; i++)
                                     {
                                         await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
-                                        await receiver.CompleteAsync(t.Result[i].SystemProperties.LockToken).ContinueWith(async (t1) =>
+                                        await receiver.CompleteMessageAsync(t.Result[i].LockToken).ContinueWith(async t1 =>
                                         {
                                             receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
                                             if (t1.IsFaulted)
                                             {
-                                                if (t1.Exception?.GetType() == typeof(ServerBusyException))
+                                                if(t1.Exception?.InnerException is ServiceBusException exception && exception.Reason == ServiceBusException.FailureReason.ServiceBusy)
                                                 {
                                                     receiveMetrics.BusyErrors = 1;
                                                     if (!this.CancellationToken.IsCancellationRequested)
@@ -210,13 +211,12 @@ namespace ThroughputTest
                                 }
                                 else
                                 {
-                                    // batch complete
-                                    await receiver.CompleteAsync(t.Result.Select((m) => { return m.SystemProperties.LockToken; })).ContinueWith(async (t1) =>
+                                    Func<Task, Task> batchContinueTask = async t1 =>
                                     {
                                         receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
                                         if (t1.IsFaulted)
                                         {
-                                            if (t1.Exception?.GetType() == typeof(ServerBusyException))
+                                            if(t1.Exception?.InnerException is ServiceBusException exception && exception.Reason == ServiceBusException.FailureReason.ServiceBusy)
                                             {
                                                 receiveMetrics.BusyErrors = 1;
                                                 if (!this.CancellationToken.IsCancellationRequested)
@@ -245,7 +245,12 @@ namespace ThroughputTest
                                                 done.Release();
                                             }
                                         }
-                                    });
+                                    };
+                                    // batch complete
+                                    foreach (var receivedMessage in t.Result)
+                                    {
+                                        await receiver.CompleteMessageAsync(receivedMessage).ContinueWith(batchContinueTask);
+                                    }
                                 }
                             }
                             else
@@ -266,6 +271,7 @@ namespace ThroughputTest
                 }
             }
             await done.WaitAsync();
+            await client.DisposeAsync();
         }
 
         static void AdjustSemaphore(Observable<int>.ChangingEventArgs e, DynamicSemaphoreSlim semaphore)
