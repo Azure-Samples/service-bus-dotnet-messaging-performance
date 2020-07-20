@@ -246,3 +246,6 @@ ModelManifest.xml
 /ServiceBusPerfSample/Properties/PublishProfiles/cvtest6 - Web Deploy.pubxml
 /ServiceBusPerfSample/Properties/Settings.settings
 /ServiceBusPerfSample/Properties/webjob-publish-settings.json
+
+# Rider IDE
+.idea/
