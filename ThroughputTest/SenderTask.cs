@@ -44,8 +44,6 @@ namespace ThroughputTest
         {
             var client = new ServiceBusClient(this.Settings.ConnectionString);
             ServiceBusSender sender = client.CreateSender(this.Settings.SendPath);
-            //ServiceBusMessage message = new ServiceBusMessage("Hello world!");
-            //var sender = new MessageSender(this.Settings.ConnectionString, this.Settings.SendPath, NoRetry.Default);
             var payload = new byte[this.Settings.MessageSizeInBytes];
             var semaphore = new DynamicSemaphoreSlim(this.Settings.MaxInflightSends.Value);
             var done = new SemaphoreSlim(1);

@@ -42,7 +42,6 @@ namespace ThroughputTest
                     settings.SendPath = cb.EntityPath;
                 }
                 
-                //cb.EntityPath = String.Empty;
                 settings.ConnectionString = cb.ToString(); 
             }
             if (settings.ReceivePaths == null || settings.ReceivePaths.Count() == 0)
