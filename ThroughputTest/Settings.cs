@@ -12,7 +12,7 @@ namespace ThroughputTest
     using System.Collections.Generic;
     using CommandLine;
     using CommandLine.Text;
-    using Microsoft.Azure.ServiceBus;
+    using Azure.Messaging.ServiceBus;
 
     class Settings
     {
@@ -35,7 +35,7 @@ namespace ThroughputTest
         public int MetricsDisplayFrequency { get; set; } = 10;
 
         [Option('m', "receive-mode", Required = false, HelpText = "Receive mode.'PeekLock' (default) or 'ReceiveAndDelete'")]
-        public ReceiveMode ReceiveMode { get; set; } = ReceiveMode.PeekLock;
+        public ServiceBusReceiveMode ReceiveMode { get; set; } = ServiceBusReceiveMode.PeekLock;
 
         [Option('r', "receiver-count", Required = false, HelpText = "Number of concurrent receivers (default 1)")]
         public int ReceiverCount { get; set; } = 5;
@@ -62,7 +62,7 @@ namespace ThroughputTest
         public Observable<int> MaxInflightReceives { get; internal set; } = new Observable<int>(1);
 
         [Option('v', "receive-batch-count", Required = false, HelpText = "Max number of messages per batch (default 0, no batching)")]
-        public int ReceiveBatchCount { get; private set; } = 0;
+        public int ReceiveBatchCount { get; private set; } = 5;
 
         [Option('w', "receive-work-duration", Required = false, HelpText = "Work simulation delay between receive and completion (milliseconds, default 0, no work)")]
         public int WorkDuration { get; private set; } = 0;
