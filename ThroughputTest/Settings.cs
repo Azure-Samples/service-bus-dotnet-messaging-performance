@@ -62,7 +62,7 @@ namespace ThroughputTest
         public Observable<int> MaxInflightReceives { get; internal set; } = new Observable<int>(1);
 
         [Option('v', "receive-batch-count", Required = false, HelpText = "Max number of messages per batch (default 0, no batching)")]
-        public int ReceiveBatchCount { get; private set; } = 5;
+        public int ReceiveBatchCount { get; private set; } = 0;
 
         [Option('w', "receive-work-duration", Required = false, HelpText = "Work simulation delay between receive and completion (milliseconds, default 0, no work)")]
         public int WorkDuration { get; private set; } = 0;

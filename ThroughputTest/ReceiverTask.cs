@@ -51,8 +51,6 @@ namespace ThroughputTest
             options.ReceiveMode = this.Settings.ReceiveMode;
             options.PrefetchCount = Settings.PrefetchCount;
             ServiceBusReceiver receiver = client.CreateReceiver(path, options);
-            //var receiver = new MessageReceiver(this.Settings.ConnectionString, path, this.Settings.ReceiveMode);
-            //receiver.PrefetchCount = Settings.PrefetchCount;
             var semaphore = new DynamicSemaphoreSlim(this.Settings.MaxInflightReceives.Value + 1);
             var done = new SemaphoreSlim(1); done.Wait();
             var sw = Stopwatch.StartNew();
