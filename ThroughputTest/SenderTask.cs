@@ -148,17 +148,17 @@ namespace ThroughputTest
             bool wait = false;
             ex.Handle((x) =>
             {
-                if ((ServiceBusException)x is ServiceBusException)
+                if (x is ServiceBusException sbException)
                 {
-                    if (((ServiceBusException)x).Reason == ServiceBusFailureReason.MessagingEntityNotFound)
+                    if (sbException.Reason == ServiceBusFailureReason.ServiceCommunicationProblem)
                     {
-                        if (((ServiceBusException)x).InnerException is SocketException &&
-                        ((SocketException)((ServiceBusException)x).InnerException).SocketErrorCode == SocketError.HostNotFound)
+                        if (sbException.InnerException is SocketException socketException &&
+                        socketException.SocketErrorCode == SocketError.HostNotFound)
                         {
                             return false;
                         }
                     }
-                    if (((ServiceBusException)x).Reason == ServiceBusFailureReason.ServiceBusy)
+                    if (sbException.Reason == ServiceBusFailureReason.ServiceBusy)
                     {
                         sendMetrics.BusyErrors = 1;
                         if (!this.CancellationToken.IsCancellationRequested)

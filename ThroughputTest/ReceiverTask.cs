@@ -75,7 +75,7 @@ namespace ThroughputTest
                         receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
                         if (t.IsFaulted || t.IsCanceled || t.Result == null)
                         {
-                            if (t.Exception?.GetType() == typeof(ServiceBusFailureReason))
+                            if ((Exception)t.Exception is ServiceBusException sbException && sbException.Reason == ServiceBusFailureReason.ServiceBusy)
                             {
                                 receiveMetrics.BusyErrors = 1;
                                 if (!this.CancellationToken.IsCancellationRequested)
@@ -141,47 +141,84 @@ namespace ThroughputTest
                 {
                     nsec = sw.ElapsedTicks;
                     // we're going to unblock the receives after 10 seconds if there's no pending message
-                    Task<IReadOnlyList<ServiceBusReceivedMessage>> t = receiver.ReceiveMessagesAsync(Settings.ReceiveBatchCount, TimeSpan.FromSeconds(10));
-                    receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
-                    if (t.IsFaulted || t.IsCanceled || t.Result == null)
+                    receiver.ReceiveMessagesAsync(Settings.ReceiveBatchCount, TimeSpan.FromSeconds(10)).ContinueWith(async (t) =>
                     {
-                        if (t.Exception?.GetType() == typeof(ServiceBusFailureReason))
+                        receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
+                        if (t.IsFaulted || t.IsCanceled || t.Result == null)
                         {
-                            receiveMetrics.BusyErrors = 1;
-                            if (!this.CancellationToken.IsCancellationRequested)
+                            if ((Exception)t.Exception is ServiceBusException sbException && sbException.Reason == ServiceBusFailureReason.ServiceBusy)
                             {
-                                await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
+                                receiveMetrics.BusyErrors = 1;
+                                if (!this.CancellationToken.IsCancellationRequested)
+                                {
+                                    await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
+                                }
+                            }
+                            else
+                            {
+                                receiveMetrics.Errors = 1;
+                            }
+                            Metrics.PushReceiveMetrics(receiveMetrics);
+                            semaphore.Release();
+                            if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
+                            {
+                                done.Release();
                             }
                         }
                         else
                         {
-                            receiveMetrics.Errors = 1;
-                        }
-                        Metrics.PushReceiveMetrics(receiveMetrics);
-                        semaphore.Release();
-                        if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
-                        {
-                            done.Release();
-                        }
-                    }
-                    else {
-                        receiveMetrics.Messages = t.Result.Count;
-                        receiveMetrics.Receives = 1;
-                        nsec = sw.ElapsedTicks;
-                        if (Settings.ReceiveMode == ServiceBusReceiveMode.PeekLock)
-                        {
-                            if (Settings.WorkDuration > 0)
+                            receiveMetrics.Messages = t.Result.Count;
+                            receiveMetrics.Receives = 1;
+                            nsec = sw.ElapsedTicks;
+                            if (Settings.ReceiveMode == ServiceBusReceiveMode.PeekLock)
                             {
-                                // handle completes singly
-                                for (int i = 0; i < t.Result.Count; i++)
+                                if (Settings.WorkDuration > 0)
                                 {
-                                    await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
-                                    await receiver.CompleteMessageAsync(t.Result[i]).ContinueWith(async (t1) =>
+                                    // handle completes singly
+                                    for (int i = 0; i < t.Result.Count; i++)
+                                    {
+                                        await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
+                                        await receiver.CompleteMessageAsync(t.Result[i]).ContinueWith(async (t1) =>
+                                        {
+                                            receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
+                                            if (t1.IsFaulted)
+                                            {
+                                                if ((Exception)t1.Exception is ServiceBusException sbException && sbException.Reason == ServiceBusFailureReason.ServiceBusy)
+                                                {
+                                                    receiveMetrics.BusyErrors = 1;
+                                                    if (!this.CancellationToken.IsCancellationRequested)
+                                                    {
+                                                        await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    receiveMetrics.Errors = 1;
+                                                }
+                                            }
+                                            else
+                                            {
+                                                receiveMetrics.CompleteCalls = 1;
+                                                receiveMetrics.Completions = t.Result.Count;
+                                            }
+                                            Metrics.PushReceiveMetrics(receiveMetrics);
+                                            semaphore.Release();
+                                            if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
+                                            {
+                                                done.Release();
+                                            }
+                                        });
+                                    }
+                                }
+                                else
+                                {
+                                    // batch complete
+                                    await receiver.CompleteMessageAsync((ServiceBusReceivedMessage)t.Result.Select((m) => { return m; })).ContinueWith(async (t1) =>
                                     {
                                         receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
                                         if (t1.IsFaulted)
                                         {
-                                            if (t1.Exception?.GetType() == typeof(ServiceBusFailureReason))
+                                            if ((Exception)t1.Exception is ServiceBusException sbException && sbException.Reason == ServiceBusFailureReason.ServiceBusy)
                                             {
                                                 receiveMetrics.BusyErrors = 1;
                                                 if (!this.CancellationToken.IsCancellationRequested)
@@ -197,71 +234,38 @@ namespace ThroughputTest
                                         else
                                         {
                                             receiveMetrics.CompleteCalls = 1;
-                                            receiveMetrics.Completions = 1;
+                                            receiveMetrics.Completions = t.Result.Count;
                                         }
                                         Metrics.PushReceiveMetrics(receiveMetrics);
                                         semaphore.Release();
-                                        if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
+
+                                        // count all the messages
+                                        for (int k = 0; k < t.Result.Count; k++)
                                         {
-                                            done.Release();
+                                            if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
+                                            {
+                                                done.Release();
+                                            }
                                         }
                                     });
                                 }
                             }
                             else
                             {
-                                // batch complete
-                                await receiver.CompleteMessageAsync((ServiceBusReceivedMessage)t.Result.Select((m) => { return m; })).ContinueWith(async (t1) =>
+                                if (Settings.WorkDuration > 0)
                                 {
-                                    receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
-                                    if (t1.IsFaulted)
-                                    {
-                                        if (t1.Exception?.GetType() == typeof(ServiceBusFailureReason))
-                                        {
-                                            receiveMetrics.BusyErrors = 1;
-                                            if (!this.CancellationToken.IsCancellationRequested)
-                                            {
-                                                await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
-                                            }
-                                        }
-                                        else
-                                        {
-                                            receiveMetrics.Errors = 1;
-                                        }
-                                    }
-                                    else
-                                    {
-                                        receiveMetrics.CompleteCalls = 1;
-                                        receiveMetrics.Completions = t.Result.Count;
-                                    }
-                                    Metrics.PushReceiveMetrics(receiveMetrics);
-                                    semaphore.Release();
-
-                                    // count all the messages
-                                    for (int k = 0; k < t.Result.Count; k++)
-                                    {
-                                        if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
-                                        {
-                                            done.Release();
-                                        }
-                                    }
-                                });
+                                    await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
+                                }
+                                Metrics.PushReceiveMetrics(receiveMetrics);
+                                semaphore.Release();
+                                if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
+                                {
+                                    done.Release();
+                                }
                             }
                         }
-                        else
-                        {
-                            if (Settings.WorkDuration > 0)
-                            {
-                                await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
-                            }
-                            Metrics.PushReceiveMetrics(receiveMetrics);
-                            semaphore.Release();
-                            if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
-                            {
-                                done.Release();
-                            }
-                        }
-                    }
+                    }).Fork();
+                    
                 }
             }
             await done.WaitAsync();
