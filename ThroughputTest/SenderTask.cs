@@ -95,7 +95,7 @@ namespace ThroughputTest
                 }
                 else
                 {
-                    List<ServiceBusMessage> batch = new List<ServiceBusMessage>();
+                    var batch = new List<ServiceBusMessage>();
                     for (int i = 0; i < Settings.SendBatchCount && j < Settings.MessageCount && !this.CancellationToken.IsCancellationRequested; i++, j++)
                     {
                         batch.Add(new ServiceBusMessage(payload) { TimeToLive = TimeSpan.FromMinutes(5) });

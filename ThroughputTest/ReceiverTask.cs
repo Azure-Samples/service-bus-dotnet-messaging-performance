@@ -46,8 +46,8 @@ namespace ThroughputTest
 
         async Task ReceiveTask(string path)
         {
-            ServiceBusClient client = new ServiceBusClient(this.Settings.ConnectionString);
-            ServiceBusReceiverOptions options = new ServiceBusReceiverOptions();
+            var client = new ServiceBusClient(this.Settings.ConnectionString);
+            var options = new ServiceBusReceiverOptions();
             options.ReceiveMode = this.Settings.ReceiveMode;
             options.PrefetchCount = Settings.PrefetchCount;
             ServiceBusReceiver receiver = client.CreateReceiver(path, options);
