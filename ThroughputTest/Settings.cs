@@ -12,7 +12,7 @@ namespace ThroughputTest
     using System.Collections.Generic;
     using CommandLine;
     using CommandLine.Text;
-    using Microsoft.Azure.ServiceBus;
+    using Azure.Messaging.ServiceBus;
 
     class Settings
     {
@@ -35,7 +35,7 @@ namespace ThroughputTest
         public int MetricsDisplayFrequency { get; set; } = 10;
 
         [Option('m', "receive-mode", Required = false, HelpText = "Receive mode.'PeekLock' (default) or 'ReceiveAndDelete'")]
-        public ReceiveMode ReceiveMode { get; set; } = ReceiveMode.PeekLock;
+        public ServiceBusReceiveMode ReceiveMode { get; set; } = ServiceBusReceiveMode.PeekLock;
 
         [Option('r', "receiver-count", Required = false, HelpText = "Number of concurrent receivers (default 1)")]
         public int ReceiverCount { get; set; } = 5;

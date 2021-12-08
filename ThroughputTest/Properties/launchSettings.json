@@ -2,7 +2,7 @@
   "profiles": {
     "ServiceBusPerfSample": {
       "commandName": "Project",
-      commandLineArgs": ""
+      "commandLineArgs": ""
     }
   }
 }

@@ -9,9 +9,9 @@
 namespace ThroughputTest
 {
     using CommandLine;
-    using Microsoft.Azure.ServiceBus;
     using System;
     using System.Linq;
+    using Azure.Messaging.ServiceBus;
 
     class Program
     {
@@ -25,7 +25,7 @@ namespace ThroughputTest
         
         static void RunOptionsAndReturnExitCode(Settings settings)
         {
-            ServiceBusConnectionStringBuilder cb = new ServiceBusConnectionStringBuilder(settings.ConnectionString);
+            ServiceBusConnectionStringProperties cb = ServiceBusConnectionStringProperties.Parse(settings.ConnectionString);
             if (string.IsNullOrWhiteSpace(cb.EntityPath))
             {
                 if (string.IsNullOrWhiteSpace(settings.SendPath))
@@ -41,7 +41,7 @@ namespace ThroughputTest
                 {
                     settings.SendPath = cb.EntityPath;
                 }
-                cb.EntityPath = String.Empty;
+                
                 settings.ConnectionString = cb.ToString(); 
             }
             if (settings.ReceivePaths == null || settings.ReceivePaths.Count() == 0)
