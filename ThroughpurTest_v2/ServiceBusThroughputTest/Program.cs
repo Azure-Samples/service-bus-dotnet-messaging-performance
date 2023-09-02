@@ -223,7 +223,7 @@ namespace ServiceBusThroughputTest
         [Option('C', "connection-string", Required = true, HelpText = "Connection string")]
         public string ConnectionString { get; set; }
 
-        [Option('Q', "entity-path", Required = false, HelpText = "Entity path. Queue or topic. For Topic/Subscription, provide in this format - {topic}:{subscription}")]
+        [Option('S', "entity-path", Required = false, HelpText = "Entity path. Queue or topic. For Topic/Subscription, provide in this format - {topic}:{subscription}")]
         public string QueueName { get; set; }
 
         [Option('b', "payload-size-bytes", Required = false, HelpText = "Bytes per message (default 1024)")]
