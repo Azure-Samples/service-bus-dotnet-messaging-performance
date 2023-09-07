@@ -38,7 +38,6 @@ on the same entity. You can also receive from dead-letter queues.
 |------------------------------|-------------------------------------------------------------------------------|
 | Send to and receive from a queue |```ThroughputTest -C {connection-string} -S myQueueName ```          |
 | Send to a topic and receive from a subscription | ``` ThroughputTest -C {connection-string} -S myTopicName -R myTopicName/subscriptions/mySubName ``` |
-| Send to a topic and receive from two subscriptions | ``` ThroughputTest -C {connection-string} -S myTopicName -R myTopicName/subscriptions/mySubNameA myTopicName/subscriptions/mySubNameB ``` |
 | Send a queue |```ThroughputTest -C {connection-string} -S myQueueName -r 0 ```          |
 | Receive from a queue |```ThroughputTest -C {connection-string} -S myQueueName -s 0 ```          |
 
