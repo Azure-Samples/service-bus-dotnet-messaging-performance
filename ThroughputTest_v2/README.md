@@ -1,48 +1,13 @@
-﻿# Azure Service Bus Throughput Performance Test
+# Azure Service Bus Throughput Performance Test
 
-This code sample illustrates the available throughput performance options for Azure Service Bus clients 
-and also allows for running experiments that dynamically adjust some tuning parameters. 
+In the v2 version, we have simplified and done some refactoring of the original console app. The gut of the app is still exactly same as before.
+We now have two common libraries that the console app depends on. This allows the core libraries to be hosted not only in console (as in the v2 version in the repo) but also
+in containerized environments such as Service Fabric for automated scaling and generating/simulating higher throughput/load scenarios
+(without the need of having to spin up vms manually). 
 
-> This tool is meant to be used with Azure Service Bus Premium and not with Azure Service Bus Standard.
-> Azure Service Bus Premium is designed to provide predictable performance, meaning that the results 
-> you measure with this tool are representative of the performance you can expect for your applications. 
+The console app now also prints out P99 metric which depending on the scenario is sometimes more important than average. 
 
-The sample assumes that you are generally familiar with the Service Bus .NET SDK and with how to set up 
-namespaces and entities within those namespaces. 
-
-The sample can either send and receive messages from a single instance, or just act as either sender or receiver,
-allowing simulation of different scenarios. 
-
-The sending side supports sending messages singly or in batches, and it supports pipelining of send operations 
-whereby up to a certain number of messages are kept in flight and their acknowledgement is handled asynchronously. 
-You can start one or multiple concurrent senders, and each sender can be throttled by imposing a pause between
-individual send operations.
-
-The receive side supports the "ReceiveAndDelete" and "PeekLock" receive modes, one or multiple concurrent 
-receive loops, single or batch receive operations, and single or batch completion. You can simulate having
-multiple concurrent handlers on a receiver and you can also impose a delay to simulate work.
-
-## What to expect
-
-This sample is specifically designed to test throughput limits of queues and topics/subscriptions in Service Bus 
-namespaces. It does not measure end-to-end latency, meaning how fast messages can pass through Service Bus under 
-optimal conditions. The goals of achieving maximum throughput and the lowest end-to-end latency are fundamentally 
-at odds, as you might know first-hand from driving a car. Either you can go fast on a street with light traffic, or 
-the street can handle a maximum capacity of cars at the same time, but at the cost of individual speed. 
-The goal of this sample is to find out where the capacity limits are. 
-
-As discussed in the [product documentation](https://docs.microsoft.com/azure/service-bus-messaging/message-transfers-locks-settlement), 
-network latency has very significant impact on the achievable throughput. If you are running this sample from your
-development workstation, throughput will be substantially lower than from within an Azure VM. If you want to 
-test limits for a scenario where the Service Bus client will reside inside Azure, you should also run this test 
-inside Azure on a Windows or Linux VM that resides within the same region as the Service Bus namespace you 
-want to test.
-
-In an in-region setup, and with ideal parameters, you can achieve send rates exceeding 20000 msg/sec at 1024 bytes per message
-from a single client, meaning that a 1GB queue will fill up in under a minute. Also be aware that receive operations are
-generally more costly and therefore slower than send operations, which means that a test with maximum send 
-pressure (several senders using batching) may not be sustainable for longer periods because the receivers might not be 
-able to keep up.
+This version is tailored more for windows and azure containerized environments so if you wish to use it on Linux, v1 is still a better option.
 
 ## Building the Tool
 
@@ -73,7 +38,6 @@ on the same entity. You can also receive from dead-letter queues.
 |------------------------------|-------------------------------------------------------------------------------|
 | Send to and receive from a queue |```ThroughputTest -C {connection-string} -S myQueueName ```          |
 | Send to a topic and receive from a subscription | ``` ThroughputTest -C {connection-string} -S myTopicName -R myTopicName/subscriptions/mySubName ``` |
-| Send to a topic and receive from two subscriptions | ``` ThroughputTest -C {connection-string} -S myTopicName -R myTopicName/subscriptions/mySubNameA myTopicName/subscriptions/mySubNameB ``` |
 | Send a queue |```ThroughputTest -C {connection-string} -S myQueueName -r 0 ```          |
 | Receive from a queue |```ThroughputTest -C {connection-string} -S myQueueName -s 0 ```          |
 
