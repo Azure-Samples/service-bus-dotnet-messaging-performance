@@ -4,24 +4,15 @@
         <OutputType>Exe</OutputType>
         <TargetFramework>net9.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.*"/>
-        <PackageReference Include="System.Text.Json" Version="9.*"/>
         <PackageReference Include="CommandLineParser" Version="2.*"/>
-        <PackageReference Include="Newtonsoft.Json" Version="13.*"/>
-        <PackageReference Include="System.Buffers" Version="4.*"/>
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\ServiceBusThroughputTest.Common\ServiceBusThroughputTest.Common.csproj"/>
         <ProjectReference Include="..\ServiceBusThroughputTestLib\ServiceBusThroughputTestLib.csproj"/>
-    </ItemGroup>
-
-    <ItemGroup>
-        <Folder Include="Properties\"/>
     </ItemGroup>
 
 </Project>
