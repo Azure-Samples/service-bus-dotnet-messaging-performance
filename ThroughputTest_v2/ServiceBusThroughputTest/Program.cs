@@ -1,9 +1,9 @@
 ﻿//---------------------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation. All rights reserved.  
+// Copyright (c) Microsoft Corporation. All rights reserved.
 //
-// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES 
-// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
+// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
+// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES
+// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
 //---------------------------------------------------------------------------------
 
 namespace ServiceBusThroughputTest
@@ -17,21 +17,18 @@ namespace ServiceBusThroughputTest
     using CommandLine.Text;
     using System.Diagnostics;
     using ServiceBusThroughputTestLib;
-    using System.Configuration;
 
     class Program
     {
         const string connString = "<ns-conn-str>";
         const string queue = "queue1";
-        const string MetricsSamplesPerDisplayIntervalSenderKeyName = "MetricsSamplesPerDisplayIntervalSender";
-        const string MetricsSamplesPerDisplayIntervalReceiverKeyName = "MetricsSamplesPerDisplayIntervalReceiver";
         const int MetricsSamplesPerDisplayIntervalSenderDefault = 2000;
         const int MetricsSamplesPerDisplayIntervalReceiverDefault = 10000;
 
         static void Main(string[] args)
         {
             CommandLine.Parser.Default.ParseArguments<Settings>(args)
-                 .WithParsed<Settings>(opts => StartSendReceives(opts));
+                .WithParsed<Settings>(opts => StartSendReceives(opts));
         }
 
         static void StartSendReceives(Settings settings)
@@ -46,9 +43,8 @@ namespace ServiceBusThroughputTest
 
             settings.PrintSettings();
 
-            int metricsSamplesPerDisplayIntervalSender, metricsSamplesPerDisplayIntervalReceiver;
-            GetConfigValue(MetricsSamplesPerDisplayIntervalSenderKeyName, int.Parse, out metricsSamplesPerDisplayIntervalSender, MetricsSamplesPerDisplayIntervalSenderDefault);
-            GetConfigValue(MetricsSamplesPerDisplayIntervalReceiverKeyName, int.Parse, out metricsSamplesPerDisplayIntervalReceiver, MetricsSamplesPerDisplayIntervalReceiverDefault);
+            int metricsSamplesPerDisplayIntervalSender = MetricsSamplesPerDisplayIntervalSenderDefault;
+            int metricsSamplesPerDisplayIntervalReceiver = MetricsSamplesPerDisplayIntervalReceiverDefault;
 
             Console.WriteLine("Starting senders and receivers. Press Enter key to stop at anytime...");
 
@@ -127,7 +123,7 @@ namespace ServiceBusThroughputTest
 
                     Console.Write("R|{0,10}|{1,10}|{2,5}|{3,5}|", rList.First().Tick / Stopwatch.Frequency + 1, rList.Last().Tick / Stopwatch.Frequency + 1, settings.ReceiveBatchSize, settings.MaxInflightReceives);
                     WriteStat(rList, i => i.ReceiveDuration100ns, Stopwatch.Frequency / 1000.0);
-                    
+
                     var msgs = rList.Sum(i => i.Messages);
                     receiveTotal += msgs;
                     Console.Write("{0,10:0.00}|{1,10}|{2,10}|{3,10}|{4,10}|{5,10}|", rList.Sum(i => i.Messages) / (double)settings.MetricsDisplayFrequency, msgs, rList.Sum(i => i.Receives), rList.Sum(i => i.Errors), rList.Sum(i => i.BusyErrors), receiveTotal);
@@ -157,33 +153,15 @@ namespace ServiceBusThroughputTest
             Console.Write("{0,10:0.00}|{1,10:0.00}|{2,10:0.00}|{3,10:0.00}|", list.Average(f) / scale, list.Min(f) / scale, list.Max(f) / scale, Percentile(list.Select(s => f(s)).ToArray(), 0.99) / scale);
         }
 
-        static bool GetConfigValue<T>(string keyName, Func<string, T> parseFunc, out T val, T defaultVal = default(T))
-        {
-            if (ConfigurationManager.AppSettings.AllKeys.Contains(keyName))
-            {
-                try
-                {
-                    val = parseFunc(ConfigurationManager.AppSettings[keyName]);
-
-                    return true;
-                }
-                catch { }
-            }
-
-            val = defaultVal;
-
-            return false;
-        }
-
         static void TestSBReceiver()
         {
-            ServiceBusThroughputTestLib.Receiver receiver = new ServiceBusThroughputTestLib.Receiver(connString, "queue1", 1024*10, 10, 1024, 1, 60000, false);
+            ServiceBusThroughputTestLib.Receiver receiver = new ServiceBusThroughputTestLib.Receiver(connString, "queue1", 1024 * 10, 10, 1024, 1, 60000, false);
             CancellationTokenSource cts = new CancellationTokenSource();
             Task rt = receiver.Run(cts.Token);
             Thread.Sleep(TimeSpan.FromMinutes(2));
             cts.Cancel();
             rt.Wait();
-        }        
+        }
 
         static void TestSBSender()
         {
@@ -288,7 +266,7 @@ namespace ServiceBusThroughputTest
             get
             {
                 yield return new Example("queue scenario", new Settings { ConnectionString = "{Connection-String}", QueueName = "{Queue-Name}" });
-                yield return new Example("topic scenario", new Settings { ConnectionString = "{Connection-String}", QueueName = "{Topic-Name}:{Subsription-Name}"});
+                yield return new Example("topic scenario", new Settings { ConnectionString = "{Connection-String}", QueueName = "{Topic-Name}:{Subsription-Name}" });
             }
         }
     }
