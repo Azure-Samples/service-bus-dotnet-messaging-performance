@@ -1,397 +1,209 @@
-﻿//---------------------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation. All rights reserved.  
-//
-// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES 
-// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
-//---------------------------------------------------------------------------------
+using ServiceBusThroughputTest.Common;
+using System.Diagnostics;
 
-namespace ServiceBusThroughputTest
+namespace ServiceBusThroughputTest;
+
+public sealed class Metrics : ILogger
 {
-    using ServiceBusThroughputTest.Common;
-    using System;
-    using System.Buffers;
-    using System.Collections.Concurrent;
-    using System.Collections.Generic;
-    using System.Data.SqlTypes;
-    using System.Diagnostics;
-    using System.Threading;
-    using System.Threading.Tasks;
-    using System.Timers;
-    using Timer = System.Timers.Timer;
+    private readonly object sync = new();
+    private readonly bool isSend;
+    private readonly int capacity;
+    private readonly TimeProvider time;
+    private readonly long started;
+    private long windowStarted;
+    private readonly CancellationTokenSource stop;
+    private readonly Dictionary<Guid, SendMetrics> sendSessions = [];
+    private readonly Dictionary<Guid, ReceiveMetrics> receiveSessions = [];
+    private readonly List<SendMetrics> sends = [];
+    private readonly List<ReceiveMetrics> receives = [];
+    private long messages, actions, errors, busy, samples;
+    private bool disposed;
+    public event EventHandler<MetricsDisplayEventArgs>? OnMetricsDisplay;
+    public Task Completion { get; }
 
-    public sealed class Metrics : ILogger
+    public Metrics(CancellationToken cancellationToken = default, bool isSendMetric = true,
+        double metricsDisplayFrequency = 10, int maxMetricsSamplePerDisplayInterval = 5000)
+        : this(cancellationToken, isSendMetric, metricsDisplayFrequency, maxMetricsSamplePerDisplayInterval, TimeProvider.System) { }
+
+    internal Metrics(CancellationToken token, bool isSendMetric, double frequency, int maximum, TimeProvider time)
     {
-        public event EventHandler<MetricsDisplayEventArgs> OnMetricsDisplay;
-        readonly bool isSendMetric;
-        readonly long maxMetricsSamplesPerDisplayInterval = 5000;
-        readonly CancellationToken cancellationToken;
+        if (!double.IsFinite(frequency) || frequency <= 0 || frequency > 3600) throw new ArgumentOutOfRangeException(nameof(frequency));
+        if (maximum < 1 || maximum > 1_000_000) throw new ArgumentOutOfRangeException(nameof(maximum));
+        isSend = isSendMetric; capacity = maximum; this.time = time;
+        started = windowStarted = time.GetTimestamp();
+        stop = CancellationTokenSource.CreateLinkedTokenSource(token);
+        Completion = DisplayLoop(frequency);
+    }
 
-        ConcurrentDictionary<Guid, SendMetrics> sendSessions = new ConcurrentDictionary<Guid, SendMetrics>();
-        ConcurrentDictionary<Guid, ReceiveMetrics> receiveSessions = new ConcurrentDictionary<Guid, ReceiveMetrics>();
-        object timerLock = new object();
-        object metricsLock = new object();
-        ArrayPool<SendMetrics> sendMetricsPool = null;
-        ArrayPool<ReceiveMetrics> rxMetricsPool = null;
+    private async Task DisplayLoop(double frequency)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(frequency), time);
+        try { while (await timer.WaitForNextTickAsync(stop.Token).ConfigureAwait(false)) Flush(); }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+    }
 
-        SendMetrics[] activeSendMetricsBuffer = null; int sendMetricsBufferWriteIndex = -1;
-        ReceiveMetrics[] activeReceiveMetricsBuffer = null; int rxMetricsBufferWriteIndex = -1;
-
-        ObjectPool<SendMetrics> sendPool = null;
-        ObjectPool<ReceiveMetrics> rxPool = null;
-        Timer timer;
-        Stopwatch sw = Stopwatch.StartNew();
-        private bool disposedValue;
-
-        public Metrics(CancellationToken cancellationToken = default, bool isSendMetric = true, double metricsDisplayFrequency = 10.0, int maxMetricsSamplePerDisplayInterval = 5000)
+    public void Flush()
+    {
+        lock (sync)
         {
-            this.isSendMetric = isSendMetric;
-            this.cancellationToken = cancellationToken;
-            this.maxMetricsSamplesPerDisplayInterval = maxMetricsSamplePerDisplayInterval;
-
-            sendPool = new ObjectPool<SendMetrics>(
-                () => new SendMetrics(),
-                (s) =>
-                {
-                    s.SendDuration100ns = s.Tick = 0;
-                    s.Sends = s.InflightSends = s.BusyErrors = s.Errors = s.Messages = s.Size = 0;
-                },
-                maxMetricsSamplesPerDisplayInterval);
-
-            rxPool = new ObjectPool<ReceiveMetrics>(
-                () => new ReceiveMetrics(),
-                (r) =>
-                {
-                    r.ReceiveDuration100ns = r.Tick = r.CompleteDuration100ns = 0;
-                    r.Receives = r.Messages = r.CompleteCalls = r.Errors = r.BusyErrors = r.CompleteCalls = 0;
-                },
-                maxMetricsSamplesPerDisplayInterval);
-
-            sendMetricsPool = ArrayPool<SendMetrics>.Create((int)maxMetricsSamplesPerDisplayInterval, 4);
-            rxMetricsPool = ArrayPool<ReceiveMetrics>.Create((int)maxMetricsSamplesPerDisplayInterval, 4);
-
-            activeSendMetricsBuffer = sendMetricsPool.Rent((int)maxMetricsSamplesPerDisplayInterval);
-            activeReceiveMetricsBuffer = rxMetricsPool.Rent((int)maxMetricsSamplesPerDisplayInterval);
-            this.rxMetricsBufferWriteIndex = this.sendMetricsBufferWriteIndex = -1;
-
-            timer = new Timer(metricsDisplayFrequency * 1000);
-            timer.Elapsed += Timer_Elapsed;
-
-            timer.Enabled = true;
-            timer.AutoReset = true;
-            timer.Start();
-        }
-
-        private void Timer_Elapsed(object sender, ElapsedEventArgs e)
-        {
-            lock (timerLock)
+            var now = time.GetTimestamp();
+            var args = new MetricsDisplayEventArgs
             {
-                int sendMetricsCount = 0, rxMetricsCount = 0;
-                SendMetrics[] sendBuffer = this.activeSendMetricsBuffer;
-                ReceiveMetrics[] rxBuffer = this.activeReceiveMetricsBuffer;
-
-                lock (this.metricsLock)
-                {
-                    sendMetricsCount = this.sendMetricsBufferWriteIndex + 1;
-                    rxMetricsCount = this.rxMetricsBufferWriteIndex + 1;
-                    this.rxMetricsBufferWriteIndex = this.sendMetricsBufferWriteIndex = -1;
-                    this.activeSendMetricsBuffer = sendMetricsPool.Rent((int)maxMetricsSamplesPerDisplayInterval);
-                    this.activeReceiveMetricsBuffer = rxMetricsPool.Rent((int)maxMetricsSamplesPerDisplayInterval);
-                }
-
-                this.OnMetricsDisplay?.Invoke(
-                    this,
-                    new MetricsDisplayEventArgs
-                    {
-                        SendMetricsList = new ArraySegment<SendMetrics>(sendBuffer, 0, sendMetricsCount),
-                        ReceiveMetricsList = new ArraySegment<ReceiveMetrics>(rxBuffer, 0, rxMetricsCount)
-                    });
-
-                if (sendMetricsCount > 0)
-                {
-                    Parallel.For(0, sendMetricsCount, index =>
-                    {
-                        sendPool.Return(sendBuffer[index]);
-                    });
-                }
-
-                if (rxMetricsCount > 0)
-                {
-                    Parallel.For(0, rxMetricsCount, index =>
-                    {
-                        rxPool.Return(rxBuffer[index]);
-                    });
-                }
-
-                this.sendMetricsPool.Return(sendBuffer, true);
-                this.rxMetricsPool.Return(rxBuffer, true);
-            }
-
-            if (cancellationToken.IsCancellationRequested)
-            {
-                timer.Enabled = false;
-            }
-        }
-
-        public void DisposeSession(Guid sessionId)
-        {
-            if (sessionId == Guid.Empty)
-            {
-                return;
-            }
-
-            if (isSendMetric)
-            {
-                sendSessions.TryRemove(sessionId, out SendMetrics sendMetrics);
-
-                lock (metricsLock)
-                {
-                    if (sendMetricsBufferWriteIndex < this.activeSendMetricsBuffer.Length - 1)
-                    {
-                        sendMetricsBufferWriteIndex++;
-
-                        activeSendMetricsBuffer[sendMetricsBufferWriteIndex] = sendMetrics;
-                        return;
-                    }
-                }
-
-                sendPool.Return(sendMetrics);
-            }
-            else
-            {
-                receiveSessions.TryRemove(sessionId, out ReceiveMetrics receiveMetrics);
-
-                lock (metricsLock)
-                {
-                    if (rxMetricsBufferWriteIndex < this.activeReceiveMetricsBuffer.Length - 1)
-                    {
-                        rxMetricsBufferWriteIndex++;
-
-                        activeReceiveMetricsBuffer[rxMetricsBufferWriteIndex] = receiveMetrics;
-                        return;
-                    }
-                }
-
-                rxPool.Return(receiveMetrics);
-            }
-        }
-
-        Guid ILogger.StartRecordTime()
-        {
-            var sessionId = Guid.NewGuid();
-            if (isSendMetric)
-            {
-                var sendMetrics = sendPool.Get();
-
-                if (sendMetrics != null)
-                {
-                    sendSessions[sessionId] = sendMetrics;
-                    sendSessions[sessionId].Tick = sw.ElapsedTicks;
-
-                    return sessionId;
-                }
-            }
-            else
-            {
-                var rxMetrics = rxPool.Get();
-
-                if (rxMetrics != null)
-                {
-                    receiveSessions[sessionId] = rxMetrics;
-                    receiveSessions[sessionId].Tick = sw.ElapsedTicks;
-
-                    return sessionId;
-                }
-            }
-
-            return Guid.Empty;
-        }
-
-        double ILogger.StopRecordTimeAndGetElapsedMs(Guid sessionId)
-        {
-            if (sessionId == Guid.Empty)
-            {
-                return 0;
-            }
-
-            long elapsed;
-            if (isSendMetric)
-            {
-                elapsed = sendSessions[sessionId].SendDuration100ns = sw.ElapsedTicks - sendSessions[sessionId].Tick;
-            }
-            else
-            {
-                elapsed = receiveSessions[sessionId].ReceiveDuration100ns = sw.ElapsedTicks - receiveSessions[sessionId].Tick;
-            }
-
-            return elapsed / (Stopwatch.Frequency / 1000.0);
-        }
-
-        void ILogger.StartCompletionRecordTime(Guid sessionId)
-        {
-            if (sessionId == Guid.Empty)
-            {
-                return;
-            }
-
-            if (!isSendMetric)
-            {
-                receiveSessions[sessionId].CompletionStartTick = sw.ElapsedTicks;
-            }
-        }
-
-        double ILogger.StopCompletionRecordTimeAndGetElapsedMs(Guid sessionId)
-        {
-            if (sessionId == Guid.Empty || isSendMetric)
-            {
-                return 0;
-            }
-
-            receiveSessions[sessionId].CompleteDuration100ns = sw.ElapsedTicks - receiveSessions[sessionId].CompletionStartTick;
-
-            return receiveSessions[sessionId].CompleteDuration100ns / (Stopwatch.Frequency / 1000.0);
-        }
-
-        void ILogger.IncrementActionCount(Guid sessionId)
-        {
-            if (sessionId == Guid.Empty)
-                return;
-
-            if (isSendMetric)
-            {
-                sendSessions[sessionId].Sends = sendSessions[sessionId].Sends + 1;
-            }
-            else
-            {
-                receiveSessions[sessionId].Receives = receiveSessions[sessionId].Receives + 1;
-            }
-        }
-
-        void ILogger.IncrementMetricValueBy(Guid sessionId, int count)
-        {
-            if (sessionId == Guid.Empty)
-                return;
-
-            if (isSendMetric)
-            {
-                sendSessions[sessionId].Messages = sendSessions[sessionId].Messages + count;
-            }
-            else
-            {
-                receiveSessions[sessionId].Messages = receiveSessions[sessionId].Messages + count;
-            }
-        }
-
-        void ILogger.IncrementErrorCount(Guid sessionId)
-        {
-            if (sessionId == Guid.Empty)
-                return;
-
-            if (isSendMetric)
-            {
-                sendSessions[sessionId].Errors = sendSessions[sessionId].Errors + 1;
-            }
-            else
-            {
-                receiveSessions[sessionId].Errors = receiveSessions[sessionId].Errors + 1;
-            }
-        }
-
-        void ILogger.IncrementBusyErrorCount(Guid sessionId)
-        {
-            if (sessionId == Guid.Empty)
-                return;
-
-            if (isSendMetric)
-            {
-                sendSessions[sessionId].BusyErrors = sendSessions[sessionId].BusyErrors + 1;
-            }
-            else
-            {
-                receiveSessions[sessionId].BusyErrors = receiveSessions[sessionId].BusyErrors + 1;
-            }
-        }
-
-        void ILogger.AddTrace(string trace)
-        {
-        }
-
-        private void Dispose(bool disposing)
-        {
-            if (!disposedValue)
-            {
-                if (disposing)
-                {
-                    this.timer.Enabled = false;
-
-                    lock (metricsLock)
-                    {
-                        this.timer.Enabled = false;
-
-                        this.sendSessions.Clear();
-                        this.receiveSessions.Clear();
-                        this.sendSessions = null;
-                        this.receiveSessions = null;
-                    }
-                }
-
-                disposedValue = true;
-            }
-        }
-
-        public void Dispose()
-        {
-            Dispose(disposing: true);
-            GC.SuppressFinalize(this);
+                SendMetricsList = sends.ToArray(), ReceiveMetricsList = receives.ToArray(),
+                StartSeconds = time.GetElapsedTime(started, windowStarted).TotalSeconds,
+                EndSeconds = time.GetElapsedTime(started, now).TotalSeconds,
+                Messages = messages, Actions = actions, Errors = errors, BusyErrors = busy
+            };
+            sends.Clear(); receives.Clear();
+            messages = actions = errors = busy = samples = 0;
+            windowStarted = now;
+            OnMetricsDisplay?.Invoke(this, args);
         }
     }
 
-    public class ObjectPool<T>
+    private long TicksSince(long timestamp) => (long)(time.GetElapsedTime(timestamp).TotalSeconds * Stopwatch.Frequency);
+
+    public Guid StartRecordTime()
     {
-        private readonly ConcurrentBag<T> _objects;
-        private readonly Func<T> _objectGenerator;
-        private readonly Action<T> _objectCleaner;
-        private readonly long _maxCount;
-        int _loaned = 0;
-
-        public ObjectPool(Func<T> objectGenerator, Action<T> objectCleaner, long maxCount = 5000)
+        lock (sync)
         {
-            _objectGenerator = objectGenerator ?? throw new ArgumentNullException(nameof(objectGenerator));
-            _objectCleaner = objectCleaner;
-            _objects = new ConcurrentBag<T>();
-            _maxCount = maxCount;
-        }
-
-        public T Get()
-        {
-            if (this._loaned >= _maxCount)
-            {
-                return default;
-            }
-
-            Interlocked.Increment(ref this._loaned);
-
-            if (_objects.TryTake(out T item))
-            {
-                return item;
-            }
-
-            return _objectGenerator();
-        }
-
-        public void Return(T item)
-        {
-            _objectCleaner?.Invoke(item);
-
-            Interlocked.Decrement(ref this._loaned);
-            _objects.Add(item);
+            ObjectDisposedException.ThrowIf(disposed, this);
+            var id = Guid.NewGuid();
+            // Tick properties retain Stopwatch tick units for existing ILogger consumers.
+            if (isSend) sendSessions.Add(id, new SendMetrics { Tick = time.GetTimestamp() });
+            else receiveSessions.Add(id, new ReceiveMetrics { Tick = time.GetTimestamp() });
+            return id;
         }
     }
 
-
-    public class MetricsDisplayEventArgs : EventArgs
+    public double StopRecordTimeAndGetElapsedMs(Guid sessionId)
     {
-        public ArraySegment<SendMetrics> SendMetricsList { get; set; }
-        public ArraySegment<ReceiveMetrics> ReceiveMetricsList { get; set; }
+        lock (sync)
+        {
+            var ticks = isSend
+                ? sendSessions[sessionId].SendDuration100ns = TicksSince(sendSessions[sessionId].Tick)
+                : receiveSessions[sessionId].ReceiveDuration100ns = TicksSince(receiveSessions[sessionId].Tick);
+            return ticks * 1000.0 / Stopwatch.Frequency;
+        }
     }
+
+    public void StartCompletionRecordTime(Guid sessionId)
+    {
+        lock (sync) if (!isSend) receiveSessions[sessionId].CompletionStartTick = time.GetTimestamp();
+    }
+
+    public double StopCompletionRecordTimeAndGetElapsedMs(Guid sessionId)
+    {
+        lock (sync)
+        {
+            if (isSend) return 0;
+            return (receiveSessions[sessionId].CompleteDuration100ns = TicksSince(receiveSessions[sessionId].CompletionStartTick))
+                * 1000.0 / Stopwatch.Frequency;
+        }
+    }
+
+    public void IncrementActionCount(Guid sessionId)
+    {
+        lock (sync) { if (isSend) sendSessions[sessionId].Sends++; else receiveSessions[sessionId].Receives++; }
+    }
+    public void IncrementMetricValueBy(Guid sessionId, int count)
+    {
+        lock (sync) { if (isSend) sendSessions[sessionId].Messages += count; else receiveSessions[sessionId].Messages += count; }
+    }
+    public void IncrementErrorCount(Guid sessionId)
+    {
+        lock (sync) { if (isSend) sendSessions[sessionId].Errors++; else receiveSessions[sessionId].Errors++; }
+    }
+    public void IncrementBusyErrorCount(Guid sessionId)
+    {
+        lock (sync) { if (isSend) sendSessions[sessionId].BusyErrors++; else receiveSessions[sessionId].BusyErrors++; }
+    }
+
+    public void DisposeSession(Guid sessionId)
+    {
+        lock (sync)
+        {
+            samples++;
+            var index = samples <= capacity ? samples - 1 : Random.Shared.NextInt64(samples);
+            if (isSend)
+            {
+                if (!sendSessions.Remove(sessionId, out var metric)) throw new InvalidOperationException("Unknown metric session.");
+                metric.Tick = (long)(time.GetElapsedTime(started, metric.Tick).TotalSeconds * Stopwatch.Frequency);
+                messages += metric.Messages; actions += metric.Sends; errors += metric.Errors; busy += metric.BusyErrors;
+                if (sends.Count < capacity) sends.Add(metric);
+                else if (index < capacity) sends[(int)index] = metric;
+            }
+            else
+            {
+                if (!receiveSessions.Remove(sessionId, out var metric)) throw new InvalidOperationException("Unknown metric session.");
+                metric.Tick = (long)(time.GetElapsedTime(started, metric.Tick).TotalSeconds * Stopwatch.Frequency);
+                messages += metric.Messages; actions += metric.Receives; errors += metric.Errors; busy += metric.BusyErrors;
+                if (receives.Count < capacity) receives.Add(metric);
+                else if (index < capacity) receives[(int)index] = metric;
+            }
+        }
+    }
+
+    public void AddTrace(string trace) => Console.Error.WriteLine(trace);
+
+    public void Dispose()
+    {
+        lock (sync) { if (disposed) return; disposed = true; }
+        stop.Cancel();
+        try { Completion.GetAwaiter().GetResult(); }
+        finally
+        {
+            stop.Dispose();
+            Flush();
+            lock (sync)
+                if (sendSessions.Count != 0 || receiveSessions.Count != 0)
+                    throw new InvalidOperationException("Drain operations before disposing metrics.");
+        }
+    }
+}
+
+public class ObjectPool<T>
+{
+    private readonly object sync = new();
+    private readonly Stack<T> items = [];
+    private readonly Func<T> generator;
+    private readonly Action<T> cleaner;
+    private readonly long maximum;
+    private long loaned;
+    public ObjectPool(Func<T> objectGenerator, Action<T> objectCleaner, long maxCount = 5000)
+    {
+        ArgumentNullException.ThrowIfNull(objectGenerator);
+        if (maxCount < 1) throw new ArgumentOutOfRangeException(nameof(maxCount));
+        generator = objectGenerator; cleaner = objectCleaner; maximum = maxCount;
+    }
+    public T? Get()
+    {
+        lock (sync)
+        {
+            if (loaned == maximum) return default;
+            var item = items.Count > 0 ? items.Pop() : generator();
+            loaned++;
+            return item;
+        }
+    }
+    public void Return(T item)
+    {
+        lock (sync)
+        {
+            if (loaned == 0) throw new InvalidOperationException("No outstanding loan.");
+            cleaner(item); items.Push(item); loaned--;
+        }
+    }
+}
+
+public class MetricsDisplayEventArgs : EventArgs
+{
+    public ArraySegment<SendMetrics> SendMetricsList { get; set; }
+    public ArraySegment<ReceiveMetrics> ReceiveMetricsList { get; set; }
+    public double StartSeconds { get; set; }
+    public double EndSeconds { get; set; }
+    public long Messages { get; set; }
+    public long Actions { get; set; }
+    public long Errors { get; set; }
+    public long BusyErrors { get; set; }
 }

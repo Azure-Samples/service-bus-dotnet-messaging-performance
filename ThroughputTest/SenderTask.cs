@@ -1,186 +1,59 @@
-//---------------------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation. All rights reserved.  
-//
-// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES 
-// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
-//---------------------------------------------------------------------------------
+using Azure.Messaging.ServiceBus;
 
-namespace ThroughputTest
+namespace ThroughputTest;
+
+sealed class SenderTask(Settings settings, Metrics metrics, ServiceBusClient client, TimeProvider time)
+    : PerformanceTask(settings, metrics, client, time)
 {
-    using System;
-    using System.Collections.Generic;
-    using System.Diagnostics;
-    using System.Threading;
-    using System.Threading.Tasks;
-    using System.Net.Sockets;
-    using Azure.Messaging.ServiceBus;
+    public override Task StartAsync(CancellationToken token) => TaskEx.WhenAllFailFast(
+        Enumerable.Range(0, Settings.SenderCount).Select<int, Func<CancellationToken, Task>>(_ => SendAsync), token);
 
-    sealed class SenderTask : PerformanceTask
+    private async Task SendAsync(CancellationToken token)
     {
-        readonly List<Task> senders;
-
-        public SenderTask(Settings settings, Metrics metrics, CancellationToken cancellationToken)
-            : base(settings, metrics, cancellationToken)
+        var sender = Client.CreateSender(Settings.SendPath);
+        using var gate = new DynamicSemaphoreSlim(Settings.MaxInflightSends);
+        var payload = new byte[Settings.MessageSizeInBytes];
+        try
         {
-            this.senders = new List<Task>();
+            await TaskEx.RunOperationsAsync(new WorkBudget(Settings.MessageCount), Math.Max(1, Settings.SendBatchCount),
+                gate, SendOperation, Time, token).ConfigureAwait(false);
         }
+        finally { await TaskEx.CloseAsync(sender.CloseAsync, Settings, Time).ConfigureAwait(false); }
 
-        protected override Task OnOpenAsync()
+        async Task<int> SendOperation(int count, double gateMs, CancellationToken ct)
         {
-            return Task.CompletedTask;
-        }
-
-        protected override Task OnStartAsync()
-        {
-            for (int i = 0; i < this.Settings.SenderCount; i++)
+            var metric = new SendMetrics { GateMilliseconds = gateMs };
+            var started = Time.GetTimestamp();
+            try
             {
-                this.senders.Add(Task.Run(SendTask));
-            }
-            return Task.WhenAll(senders);
-        }
-
-        async Task SendTask()
-        {
-            var client = new ServiceBusClient(this.Settings.ConnectionString);
-            ServiceBusSender sender = client.CreateSender(this.Settings.SendPath);
-            var payload = new byte[this.Settings.MessageSizeInBytes];
-            var semaphore = new DynamicSemaphoreSlim(this.Settings.MaxInflightSends.Value);
-            var done = new SemaphoreSlim(1);
-            done.Wait();
-            long totalSends = 0;
-
-            this.Settings.MaxInflightSends.Changing += (a, e) => AdjustSemaphore(e, semaphore);
-            var sw = Stopwatch.StartNew();
-
-            // first send will fail out if the cxn string is bad
-            await sender.SendMessageAsync(new ServiceBusMessage(payload) { TimeToLive = TimeSpan.FromMinutes(5) });
-
-            for (int j = 0; j < Settings.MessageCount && !this.CancellationToken.IsCancellationRequested; j++)
-            {
-                var sendMetrics = new SendMetrics() { Tick = sw.ElapsedTicks };
-
-                var nsec = sw.ElapsedTicks;
-                semaphore.Wait();
-                //await semaphore.WaitAsync().ConfigureAwait(false);
-                sendMetrics.InflightSends = this.Settings.MaxInflightSends.Value - semaphore.CurrentCount;
-                sendMetrics.GateLockDuration100ns = sw.ElapsedTicks - nsec; 
-                                
                 if (Settings.SendDelay > 0)
-                {
-                    await Task.Delay(Settings.SendDelay);
-                }
+                    await Task.Delay(TimeSpan.FromMilliseconds(Settings.SendDelay), Time, ct).ConfigureAwait(false);
+                started = Time.GetTimestamp();
                 if (Settings.SendBatchCount <= 1)
                 {
-                    sender.SendMessageAsync(new ServiceBusMessage(payload) { TimeToLive = TimeSpan.FromMinutes(5) })
-                        .ContinueWith(async (t) =>
-                        {
-                            if (t.IsFaulted || t.IsCanceled)
-                            {
-                                await HandleExceptions(semaphore, sendMetrics, t.Exception);
-                            }
-                            else
-                            {
-                                sendMetrics.SendDuration100ns = sw.ElapsedTicks - nsec;
-                                sendMetrics.Sends = 1;
-                                sendMetrics.Messages = 1;
-                                semaphore.Release();
-                                Metrics.PushSendMetrics(sendMetrics);
-                            }
-                            if (Interlocked.Increment(ref totalSends) >= Settings.MessageCount)
-                            {
-                                done.Release();
-                            }
-                        }).Fork();
+                    await sender.SendMessageAsync(NewMessage(), ct).ConfigureAwait(false);
+                    metric.Messages = metric.Sends = 1;
                 }
                 else
                 {
-                    var batch = new List<ServiceBusMessage>();
-                    for (int i = 0; i < Settings.SendBatchCount && j < Settings.MessageCount && !this.CancellationToken.IsCancellationRequested; i++, j++)
-                    {
-                        batch.Add(new ServiceBusMessage(payload) { TimeToLive = TimeSpan.FromMinutes(5) });
-                    }
-                    sender.SendMessagesAsync(batch)
-                       .ContinueWith(async (t) =>
-                       {
-                           if (t.IsFaulted || t.IsCanceled)
-                           {
-                               await HandleExceptions(semaphore, sendMetrics, t.Exception);
-                           }
-                           else
-                           {
-                               sendMetrics.SendDuration100ns = sw.ElapsedTicks - nsec;
-                               sendMetrics.Sends = 1;
-                               sendMetrics.Messages = Settings.SendBatchCount;
-                               semaphore.Release();
-                               Metrics.PushSendMetrics(sendMetrics);
-                           }
-                           if (Interlocked.Increment(ref totalSends) >= Settings.MessageCount)
-                           {
-                               done.Release();
-                           }
-                       }).Fork();
+                    // Respect the negotiated byte limit as well as the requested message-count limit.
+                    using var batch = await sender.CreateMessageBatchAsync(ct).ConfigureAwait(false);
+                    while (metric.Messages < count && batch.TryAddMessage(NewMessage())) metric.Messages++;
+                    if (metric.Messages == 0)
+                        throw new InvalidOperationException("A message does not fit in an SDK batch; reduce payload size or use single sends.");
+                    var actual = metric.Messages;
+                    metric.Messages = 0;
+                    await sender.SendMessagesAsync(batch, ct).ConfigureAwait(false);
+                    metric.Messages = actual;
+                    metric.Sends = 1;
                 }
+                return metric.Messages;
             }
-            await done.WaitAsync();
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { metric.Errors = 1; metric.BusyErrors = Metrics.IsBusy(ex) ? 1 : 0; throw; }
+            finally { metric.SendMilliseconds = Time.GetElapsedTime(started).TotalMilliseconds; Metrics.PushSendMetrics(metric); }
         }
 
-        static void AdjustSemaphore(Observable<int>.ChangingEventArgs e, DynamicSemaphoreSlim semaphore)
-        {
-            if (e.NewValue > e.OldValue)
-            {
-                for (int i = e.OldValue; i < e.NewValue; i++)
-                {
-                    semaphore.Grant();
-                }
-            }
-            else
-            {
-                for (int i = e.NewValue; i < e.OldValue; i++)
-                {
-                    semaphore.Revoke();
-                }
-            }
-        }
-
-        private async Task HandleExceptions(DynamicSemaphoreSlim semaphore, SendMetrics sendMetrics, AggregateException ex)
-        {
-            bool wait = false;
-            ex.Handle((x) =>
-            {
-                if (x is ServiceBusException sbException)
-                {
-                    if (sbException.Reason == ServiceBusFailureReason.ServiceCommunicationProblem)
-                    {
-                        if (sbException.InnerException is SocketException socketException &&
-                        socketException.SocketErrorCode == SocketError.HostNotFound)
-                        {
-                            return false;
-                        }
-                    }
-                    if (sbException.Reason == ServiceBusFailureReason.ServiceBusy)
-                    {
-                        sendMetrics.BusyErrors = 1;
-                        if (!this.CancellationToken.IsCancellationRequested)
-                        {
-                            wait = true;
-                        }
-                    }
-                    else
-                    {
-                        sendMetrics.Errors = 1;
-                    }
-                }
-                return true;
-            });
-
-            if (wait)
-            {
-                await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
-            }
-            semaphore.Release();
-            Metrics.PushSendMetrics(sendMetrics);
-
-        }
+        ServiceBusMessage NewMessage() => new(payload) { TimeToLive = TimeSpan.FromMinutes(5) };
     }
 }

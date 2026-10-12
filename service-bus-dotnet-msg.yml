@@ -4,7 +4,7 @@ sample:
   description: The sample in this repo can be used to help benchmark Service Bus Premium Messaging throughput, and can be used to study performance best practices.
   generateZip: true
   author: celemensv
-  readme: readme.md
+  readme: README.md
   languages:
   - csharp
   technologies:

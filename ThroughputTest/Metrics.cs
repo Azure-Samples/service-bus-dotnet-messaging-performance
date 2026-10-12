@@ -1,90 +1,86 @@
-﻿//---------------------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation. All rights reserved.  
-//
-// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES 
-// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
-//---------------------------------------------------------------------------------
+using Azure.Messaging.ServiceBus;
+using System.Globalization;
 
-namespace ThroughputTest
+namespace ThroughputTest;
+
+sealed class Metrics(TimeProvider time)
 {
-    using System;
-    using System.Collections.Generic;
-    using System.Threading.Tasks;
+    private readonly object sync = new();
+    private readonly long started = time.GetTimestamp();
+    private readonly List<SendMetrics> sends = [];
+    private readonly List<ReceiveMetrics> receives = [];
+    private double previousSeconds;
+    private long totalSent;
+    private long totalReceived;
+    public long TotalSent { get { lock (sync) return totalSent; } }
+    public long TotalReceived { get { lock (sync) return totalReceived; } }
 
-    sealed class Metrics : IObservable<SendMetrics>, IObservable<ReceiveMetrics>
+    public void PushSendMetrics(SendMetrics metric)
     {
-        object sendMetricsObserverLock = new object();
-        List<IObserver<SendMetrics>> sendMetricsObservers = new List<IObserver<SendMetrics>>();
-        object receiveMetricsObserverLock = new object();
-        List<IObserver<ReceiveMetrics>> receiveMetricsObservers = new List<IObserver<ReceiveMetrics>>();
-     
-        public Metrics(Settings settings)
-        {
-        }
-        
-        public void PushSendMetrics(SendMetrics sendMetrics)
-        {
-            Task.Run(() =>
-            {
-                IObserver<SendMetrics>[] observers;
-                lock (sendMetricsObserverLock)
-                {
-                    observers = sendMetricsObservers.ToArray();
-                }
+        lock (sync) { sends.Add(metric); totalSent += metric.Messages; }
+    }
 
-                foreach (var observer in observers)
-                {
-                    observer.OnNext(sendMetrics);
-                }                
-            }).Fork();
-        }
+    public void PushReceiveMetrics(ReceiveMetrics metric)
+    {
+        lock (sync) { receives.Add(metric); totalReceived += metric.Messages; }
+    }
 
-        public void PushReceiveMetrics(ReceiveMetrics receiveMetrics)
+    public MetricWindow Snapshot()
+    {
+        lock (sync)
         {
-            Task.Run(() =>
-            {
-                IObserver<ReceiveMetrics>[] observers;
-                lock (receiveMetricsObserverLock)
-                {
-                    observers = receiveMetricsObservers.ToArray();
-                }
-
-                foreach (var observer in observers)
-                {
-                    observer.OnNext(receiveMetrics);
-                }
-            }).Fork();
+            var now = time.GetElapsedTime(started).TotalSeconds;
+            var window = new MetricWindow(previousSeconds, now, sends.ToArray(), receives.ToArray(), totalSent, totalReceived);
+            previousSeconds = now;
+            sends.Clear();
+            receives.Clear();
+            return window;
         }
+    }
 
-        public IDisposable Subscribe(IObserver<ReceiveMetrics> observer)
+    public static bool IsBusy(Exception exception) => exception is ServiceBusException { Reason: ServiceBusFailureReason.ServiceBusy } ||
+        exception is AggregateException aggregate && aggregate.Flatten().InnerExceptions.Any(IsBusy);
+
+    public static string Statistics(IEnumerable<double> source)
+    {
+        var values = source.Order().ToArray();
+        if (values.Length == 0) return "0.00|0.00|0.00|0.00|0.00|";
+        var mean = values.Average();
+        var median = (values[(values.Length - 1) / 2] + values[values.Length / 2]) / 2;
+        var deviation = Math.Sqrt(values.Average(v => (v - mean) * (v - mean)));
+        return FormattableString.Invariant($"{mean:F2}|{median:F2}|{deviation:F2}|{values[0]:F2}|{values[^1]:F2}|");
+    }
+
+    public void Write(TextWriter output, Settings settings)
+    {
+        var window = Snapshot();
+        if (settings.SenderCount > 0)
         {
-            lock (receiveMetricsObserverLock)
-            {
-                receiveMetricsObservers.Add(observer);
-            }
-            return System.Reactive.Disposables.Disposable.Create(() =>
-            {
-                lock (receiveMetricsObserverLock)
-                {
-                    receiveMetricsObservers.Remove(observer);
-                }
-            });
+            var list = window.Sends;
+            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"S|{window.StartSeconds:F2}|{window.EndSeconds:F2}|{settings.SendBatchCount}|{settings.CfgMaxInflightSends}|") +
+                Statistics(list.Where(m => m.Sends > 0).Select(m => m.SendMilliseconds)) +
+                Statistics(list.Select(m => m.GateMilliseconds)) +
+                string.Create(CultureInfo.InvariantCulture,
+                $"{window.SendRate:F2}|{list.Sum(m => (long)m.Messages)}|{list.Sum(m => (long)m.Sends)}|{list.Sum(m => m.Errors)}|{list.Sum(m => m.BusyErrors)}|{window.TotalSent}|"));
         }
-
-        public IDisposable Subscribe(IObserver<SendMetrics> observer)
+        if (settings.ReceiverCount > 0)
         {
-            lock (sendMetricsObserverLock)
-            {
-                sendMetricsObservers.Add(observer);
-            }
-            return System.Reactive.Disposables.Disposable.Create(() =>
-            {
-                lock (sendMetricsObserverLock)
-                {
-                    sendMetricsObservers.Remove(observer);
-                }
-            });
+            var list = window.Receives;
+            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"R|{window.StartSeconds:F2}|{window.EndSeconds:F2}|{settings.ReceiveBatchCount}|{settings.CfgMaxInflightReceives}|") +
+                Statistics(list.Where(m => m.Receives > 0).Select(m => m.ReceiveMilliseconds)) +
+                Statistics(list.Where(m => m.CompleteCalls > 0).Select(m => m.CompleteMilliseconds / m.CompleteCalls)) +
+                string.Create(CultureInfo.InvariantCulture,
+                $"{window.ReceiveRate:F2}|{list.Sum(m => (long)m.Messages)}|{list.Sum(m => (long)m.Receives)}|{list.Sum(m => m.Errors)}|{list.Sum(m => m.BusyErrors)}|{window.TotalReceived}|{list.Sum(m => (long)m.Completions)}|{list.Sum(m => (long)m.CompleteCalls)}|"));
         }
+    }
+
+    public static void WriteHeaders(TextWriter output, Settings settings)
+    {
+        if (settings.SenderCount > 0)
+            output.WriteLine("S|pstart|pend|sbc|mifs|snd.avg|snd.med|snd.dev|snd.min|snd.max|gld.avg|gld.med|gld.dev|gld.min|gld.max|msg/s|total|sndop|errs|busy|overall|");
+        if (settings.ReceiverCount > 0)
+            output.WriteLine("R|pstart|pend|rbc|mifr|rcv.avg|rcv.med|rcv.dev|rcv.min|rcv.max|cpl.avg|cpl.med|cpl.dev|cpl.min|cpl.max|msg/s|total|rcvop|errs|busy|overall|completed|cplop|");
     }
 }

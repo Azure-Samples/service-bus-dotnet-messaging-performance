@@ -1,292 +1,73 @@
-//---------------------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation. All rights reserved.  
-//
-// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES 
-// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
-//---------------------------------------------------------------------------------
+using Azure.Messaging.ServiceBus;
 
-namespace ThroughputTest
+namespace ThroughputTest;
+
+sealed class ReceiverTask(Settings settings, Metrics metrics, ServiceBusClient client, TimeProvider time)
+    : PerformanceTask(settings, metrics, client, time)
 {
-    using System;
-    using System.Collections.Generic;
-    using System.Diagnostics;
-    using System.Linq;
-    using System.Threading;
-    using System.Threading.Tasks;
-    using Azure.Messaging.ServiceBus;
-
-    sealed class ReceiverTask : PerformanceTask
+    public override Task StartAsync(CancellationToken token)
     {
-        readonly List<Task> receivers;
-
-        public ReceiverTask(Settings settings, Metrics metrics, CancellationToken cancellationToken)
-            : base(settings, metrics, cancellationToken)
+        var operations = new List<Func<CancellationToken, Task>>();
+        foreach (var path in Settings.ReceivePaths)
         {
-            this.receivers = new List<Task>();
+            var address = EntityAddress.Parse(path);
+            var budget = new WorkBudget(Settings.ReceiveTarget);
+            for (var i = 0; i < Settings.ReceiverCount; i++)
+                operations.Add(ct => ReceiveAsync(address, budget, ct));
         }
+        return TaskEx.WhenAllFailFast(operations, token);
+    }
 
-        protected override Task OnOpenAsync()
+    private async Task ReceiveAsync(EntityAddress address, WorkBudget budget, CancellationToken token)
+    {
+        var receiver = address.CreateReceiver(Client, Settings);
+        using var gate = new DynamicSemaphoreSlim(Settings.MaxInflightReceives);
+        try
         {
-            return Task.CompletedTask;
+            await TaskEx.RunOperationsAsync(budget, Math.Max(1, Settings.ReceiveBatchCount), gate,
+                ReceiveOperation, Time, token).ConfigureAwait(false);
         }
+        finally { await TaskEx.CloseAsync(receiver.CloseAsync, Settings, Time).ConfigureAwait(false); }
 
-        protected override Task OnStartAsync()
+        async Task<int> ReceiveOperation(int count, double gateMs, CancellationToken ct)
         {
-            var receiverPaths = this.Settings.ReceivePaths;
-            foreach (var receiverPath in receiverPaths)
+            var metric = new ReceiveMetrics();
+            var started = Time.GetTimestamp();
+            try
             {
-                for (int i = 0; i < this.Settings.ReceiverCount; i++)
-                {
-                    this.receivers.Add(Task.Run(() => ReceiveTask(receiverPath)));
-                }
-            }
-            return Task.WhenAll(this.receivers);
-        }
-
-        async Task ReceiveTask(string path)
-        {
-            var client = new ServiceBusClient(this.Settings.ConnectionString);
-            var options = new ServiceBusReceiverOptions();
-            options.ReceiveMode = this.Settings.ReceiveMode;
-            options.PrefetchCount = Settings.PrefetchCount;
-            ServiceBusReceiver receiver = client.CreateReceiver(path, options);
-            var semaphore = new DynamicSemaphoreSlim(this.Settings.MaxInflightReceives.Value + 1);
-            var done = new SemaphoreSlim(1); done.Wait();
-            var sw = Stopwatch.StartNew();
-            long totalReceives = 0;
-            await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
-            this.Settings.MaxInflightReceives.Changing += (a, e) => AdjustSemaphore(e, semaphore);
-
-            for (int j = 0; j < Settings.MessageCount && !this.CancellationToken.IsCancellationRequested; j ++)
-            {
-                var receiveMetrics = new ReceiveMetrics() { Tick = sw.ElapsedTicks };
-
-                var nsec = sw.ElapsedTicks;
-                await semaphore.WaitAsync().ConfigureAwait(false);
-                receiveMetrics.GateLockDuration100ns = sw.ElapsedTicks - nsec;
-
+                IReadOnlyList<ServiceBusReceivedMessage> messages;
                 if (Settings.ReceiveBatchCount <= 1)
                 {
-                    nsec = sw.ElapsedTicks;
-                    // we're going to unblock the receives after 10 seconds if there's no pending message
-                    receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10)).ContinueWith(async (t) =>
-                    {
-                        receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
-                        if (t.IsFaulted || t.IsCanceled || t.Result == null)
-                        {
-                            if ((Exception)t.Exception is ServiceBusException sbException && sbException.Reason == ServiceBusFailureReason.ServiceBusy)
-                            {
-                                receiveMetrics.BusyErrors = 1;
-                                if (!this.CancellationToken.IsCancellationRequested)
-                                {
-                                    await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
-                                }
-                            }
-                            else
-                            {
-                                receiveMetrics.Errors = 1;
-                            }
-                            Metrics.PushReceiveMetrics(receiveMetrics);
-                            semaphore.Release();
-                            if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
-                            {
-                                done.Release();
-                            }
-                        }
-                        else 
-                        {
-                            receiveMetrics.Receives = receiveMetrics.Messages = 1;
-                            nsec = sw.ElapsedTicks;
-
-                            // simulate work by introducing a delay, if needed
-                            if (Settings.WorkDuration > 0)
-                            {
-                                await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
-                            }
-                            receiver.CompleteMessageAsync(t.Result).ContinueWith(async (t1) =>
-                            {
-                                receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
-                                if (t1.IsFaulted)
-                                {
-                                    if (t1.Exception?.GetType() == typeof(ServiceBusFailureReason))
-                                    {
-                                        receiveMetrics.BusyErrors = 1;
-                                        if (!this.CancellationToken.IsCancellationRequested)
-                                        {
-                                            await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        receiveMetrics.Errors = 1;
-                                    }
-                                }
-                                else
-                                {
-                                    receiveMetrics.Completions = receiveMetrics.CompleteCalls = 1;
-                                }
-                                Metrics.PushReceiveMetrics(receiveMetrics);
-                                semaphore.Release();
-                                if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
-                                {
-                                    done.Release();
-                                }
-                            }).Fork();
-                        };
-
-                    }).Fork();
+                    var message = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
+                    messages = message == null ? [] : [message];
                 }
                 else
+                    messages = await receiver.ReceiveMessagesAsync(count, TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
+                metric.ReceiveMilliseconds = Time.GetElapsedTime(started).TotalMilliseconds;
+                metric.Receives = 1;
+                metric.Messages = messages.Count;
+                if (messages.Count == 0)
                 {
-                    nsec = sw.ElapsedTicks;
-                    // we're going to unblock the receives after 10 seconds if there's no pending message
-                    receiver.ReceiveMessagesAsync(Settings.ReceiveBatchCount, TimeSpan.FromSeconds(10)).ContinueWith(async (t) =>
+                    // Empty polls are operations, not messages or errors; avoid a busy loop on immediate empty returns.
+                    await Task.Delay(TimeSpan.FromMilliseconds(10), Time, ct).ConfigureAwait(false);
+                }
+                foreach (var message in messages)
+                {
+                    if (Settings.WorkDuration > 0)
+                        await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration), Time, ct).ConfigureAwait(false);
+                    if (Settings.ReceiveMode == ServiceBusReceiveMode.PeekLock)
                     {
-                        receiveMetrics.ReceiveDuration100ns = sw.ElapsedTicks - nsec;
-                        if (t.IsFaulted || t.IsCanceled || t.Result == null)
-                        {
-                            if ((Exception)t.Exception is ServiceBusException sbException && sbException.Reason == ServiceBusFailureReason.ServiceBusy)
-                            {
-                                receiveMetrics.BusyErrors = 1;
-                                if (!this.CancellationToken.IsCancellationRequested)
-                                {
-                                    await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
-                                }
-                            }
-                            else
-                            {
-                                receiveMetrics.Errors = 1;
-                            }
-                            Metrics.PushReceiveMetrics(receiveMetrics);
-                            semaphore.Release();
-                            if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
-                            {
-                                done.Release();
-                            }
-                        }
-                        else
-                        {
-                            receiveMetrics.Messages = t.Result.Count;
-                            receiveMetrics.Receives = 1;
-                            nsec = sw.ElapsedTicks;
-                            if (Settings.ReceiveMode == ServiceBusReceiveMode.PeekLock)
-                            {
-                                if (Settings.WorkDuration > 0)
-                                {
-                                    // handle completes singly
-                                    for (int i = 0; i < t.Result.Count; i++)
-                                    {
-                                        await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
-                                        await receiver.CompleteMessageAsync(t.Result[i]).ContinueWith(async (t1) =>
-                                        {
-                                            receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
-                                            if (t1.IsFaulted)
-                                            {
-                                                if ((Exception)t1.Exception is ServiceBusException sbException && sbException.Reason == ServiceBusFailureReason.ServiceBusy)
-                                                {
-                                                    receiveMetrics.BusyErrors = 1;
-                                                    if (!this.CancellationToken.IsCancellationRequested)
-                                                    {
-                                                        await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
-                                                    }
-                                                }
-                                                else
-                                                {
-                                                    receiveMetrics.Errors = 1;
-                                                }
-                                            }
-                                            else
-                                            {
-                                                receiveMetrics.CompleteCalls = 1;
-                                                receiveMetrics.Completions = t.Result.Count;
-                                            }
-                                            Metrics.PushReceiveMetrics(receiveMetrics);
-                                            semaphore.Release();
-                                            if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
-                                            {
-                                                done.Release();
-                                            }
-                                        });
-                                    }
-                                }
-                                else
-                                {
-                                    // batch complete
-                                    await receiver.CompleteMessageAsync((ServiceBusReceivedMessage)t.Result.Select((m) => { return m; })).ContinueWith(async (t1) =>
-                                    {
-                                        receiveMetrics.CompleteDuration100ns = sw.ElapsedTicks - nsec;
-                                        if (t1.IsFaulted)
-                                        {
-                                            if ((Exception)t1.Exception is ServiceBusException sbException && sbException.Reason == ServiceBusFailureReason.ServiceBusy)
-                                            {
-                                                receiveMetrics.BusyErrors = 1;
-                                                if (!this.CancellationToken.IsCancellationRequested)
-                                                {
-                                                    await Task.Delay(3000, this.CancellationToken).ConfigureAwait(false);
-                                                }
-                                            }
-                                            else
-                                            {
-                                                receiveMetrics.Errors = 1;
-                                            }
-                                        }
-                                        else
-                                        {
-                                            receiveMetrics.CompleteCalls = 1;
-                                            receiveMetrics.Completions = t.Result.Count;
-                                        }
-                                        Metrics.PushReceiveMetrics(receiveMetrics);
-                                        semaphore.Release();
-
-                                        // count all the messages
-                                        for (int k = 0; k < t.Result.Count; k++)
-                                        {
-                                            if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
-                                            {
-                                                done.Release();
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-                            else
-                            {
-                                if (Settings.WorkDuration > 0)
-                                {
-                                    await Task.Delay(TimeSpan.FromMilliseconds(Settings.WorkDuration));
-                                }
-                                Metrics.PushReceiveMetrics(receiveMetrics);
-                                semaphore.Release();
-                                if (Interlocked.Increment(ref totalReceives) >= Settings.MessageCount)
-                                {
-                                    done.Release();
-                                }
-                            }
-                        }
-                    }).Fork();
-                    
+                        started = Time.GetTimestamp();
+                        metric.CompleteCalls++;
+                        try { await receiver.CompleteMessageAsync(message, ct).ConfigureAwait(false); metric.Completions++; }
+                        finally { metric.CompleteMilliseconds += Time.GetElapsedTime(started).TotalMilliseconds; }
+                    }
                 }
+                return messages.Count;
             }
-            await done.WaitAsync();
-        }
-
-        static void AdjustSemaphore(Observable<int>.ChangingEventArgs e, DynamicSemaphoreSlim semaphore)
-        {
-            if (e.NewValue > e.OldValue)
-            {
-                for (int i = e.OldValue; i < e.NewValue; i++)
-                {
-                    semaphore.Grant();
-                }
-            }
-            else
-            {
-                for (int i = e.NewValue; i < e.OldValue; i++)
-                {
-                    semaphore.Revoke();
-                }
-            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { metric.Errors = 1; metric.BusyErrors = Metrics.IsBusy(ex) ? 1 : 0; throw; }
+            finally { Metrics.PushReceiveMetrics(metric); }
         }
     }
 }
