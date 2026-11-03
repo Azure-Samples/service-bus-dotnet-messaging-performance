@@ -1,27 +1,31 @@
-﻿//---------------------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation. All rights reserved.  
-//
-// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES 
-// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
-//---------------------------------------------------------------------------------
+namespace ThroughputTest;
 
-namespace ThroughputTest
+abstract class Experiment(int increment, Metrics metrics, Settings settings, TimeProvider time)
 {
-    using System.Threading.Tasks;
+    protected abstract Observable<int> Concurrency { get; }
+    protected abstract long MessageCount { get; }
+    protected Settings Settings { get; } = settings;
+    protected Metrics Metrics { get; } = metrics;
 
-    abstract class Experiment
+    public async Task Run(CancellationToken token)
     {
-        public Experiment(Metrics metrics, Settings settings)
+        for (var step = 0; step < Settings.ExperimentSteps; step++)
         {
-            Metrics = metrics;
-            Settings = settings;
+            await Task.Delay(TimeSpan.FromSeconds(10), time, token).ConfigureAwait(false);
+            var before = MessageCount;
+            await Task.Delay(TimeSpan.FromSeconds(5), time, token).ConfigureAwait(false);
+            var first = MessageCount - before;
+            var original = Concurrency.Value;
+            Concurrency.Value = Math.Clamp(original + increment, 1, 10000);
+            if (Concurrency.Value == original) return;
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(20), time, token).ConfigureAwait(false);
+                before = MessageCount;
+                await Task.Delay(TimeSpan.FromSeconds(5), time, token).ConfigureAwait(false);
+                if (MessageCount - before <= first) Concurrency.Value = original;
+            }
+            catch { Concurrency.Value = original; throw; }
         }
-
-        public Metrics Metrics { get; }
-        public Settings Settings { get; }
-
-        public abstract Task<Experiment> Run();
     }
-
 }

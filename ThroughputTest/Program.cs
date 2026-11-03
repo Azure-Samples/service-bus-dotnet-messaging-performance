@@ -1,64 +1,84 @@
-﻿//---------------------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation. All rights reserved.  
-//
-// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES 
-// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
-//---------------------------------------------------------------------------------
+using Azure.Messaging.ServiceBus;
+using CommandLine;
+using CommandLine.Text;
 
-namespace ThroughputTest
+namespace ThroughputTest;
+
+static class Program
 {
-    using CommandLine;
-    using System;
-    using System.Linq;
-    using Azure.Messaging.ServiceBus;
-
-    class Program
+    public static async Task<int> Main(string[] args)
     {
-        static int result = 0;
-        static int Main(params string[] args)
+        using var stop = new CancellationTokenSource();
+        ConsoleCancelEventHandler handler = (_, e) => CancelFromConsole(stop, () => e.Cancel = true);
+        Console.CancelKeyPress += handler;
+        using var inputStop = new CancellationTokenSource();
+        var input = Console.IsInputRedirected ? Task.CompletedTask : WatchEnterAsync(stop, inputStop.Token);
+        try { return await ExecuteAsync(args, Console.Out, Console.Error, stop.Token).ConfigureAwait(false); }
+        finally
         {
-            CommandLine.Parser.Default.ParseArguments<Settings>(args)
-                 .WithParsed<Settings>(opts => RunOptionsAndReturnExitCode(opts));
-            return result;
+            inputStop.Cancel();
+            await input.ConfigureAwait(false);
+            Console.CancelKeyPress -= handler;
         }
-        
-        static void RunOptionsAndReturnExitCode(Settings settings)
+    }
+
+    internal static void CancelFromConsole(CancellationTokenSource stop, Action suppressTermination)
+    {
+        suppressTermination();
+        stop.Cancel();
+    }
+
+    internal static async Task WatchEnterAsync(CancellationTokenSource stop, CancellationToken token,
+        Func<bool>? available = null, Func<ConsoleKey>? read = null)
+    {
+        available ??= () => Console.KeyAvailable;
+        read ??= () => Console.ReadKey(true).Key;
+        try
         {
-            ServiceBusConnectionStringProperties cb = ServiceBusConnectionStringProperties.Parse(settings.ConnectionString);
-            if (string.IsNullOrWhiteSpace(cb.EntityPath))
+            while (!token.IsCancellationRequested && !stop.IsCancellationRequested)
             {
-                if (string.IsNullOrWhiteSpace(settings.SendPath))
-                {
-                    Console.WriteLine("--send-path option must be specified if there's no EntityPath in the connection string.");
-                    result = 1;
-                    return;
-                }
+                if (available() && read() == ConsoleKey.Enter) { stop.Cancel(); return; }
+                await Task.Delay(50, token).ConfigureAwait(false);
             }
-            else
-            {
-                if (string.IsNullOrWhiteSpace(settings.SendPath))
-                {
-                    settings.SendPath = cb.EntityPath;
-                }
-                
-                settings.ConnectionString = cb.ToString(); 
-            }
-            if (settings.ReceivePaths == null || settings.ReceivePaths.Count() == 0)
-            {
-                settings.ReceivePaths = new string[] { settings.SendPath };
-            }
-            Console.WriteLine("\n\nPress <ENTER> to STOP at anytime\n");
-            Metrics metrics = new Metrics(settings);
-            ServiceBusPerformanceApp app = new ServiceBusPerformanceApp(settings, metrics);
-            var experiments = new Experiment[]
-            {
-                // new IncreaseInflightSendsExperiment(50, metrics, settings),
-                // new IncreaseInflightReceivesExperiment(10, metrics, settings)
-            };
-            app.Run(experiments).Wait();
-            Console.WriteLine("Complete");
-            
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+    }
+
+    internal static async Task<int> ExecuteAsync(string[] args, TextWriter output, TextWriter error, CancellationToken token,
+        Func<Settings, ServiceBusClient>? factory = null, Func<string, string?>? environment = null, TimeProvider? time = null)
+    {
+        using var parser = new Parser(config => { config.HelpWriter = null; config.CaseInsensitiveEnumValues = true; });
+        var parsed = parser.ParseArguments<Settings>(args);
+        if (parsed is NotParsed<Settings> invalid)
+        {
+            if (invalid.Errors.All(e => e.Tag is ErrorType.HelpRequestedError or ErrorType.VersionRequestedError))
+            { output.WriteLine(HelpText.AutoBuild(parsed)); return 0; }
+            // Never echo token values: an unknown/malformed option may itself contain a secret.
+            error.WriteLine("Invalid command line. Use --help for supported options.");
+            return 2;
+        }
+        var settings = ((Parsed<Settings>)parsed).Value;
+        try { settings.Validate(environment); }
+        catch (ArgumentException ex) { error.WriteLine(ex.Message); return 2; }
+
+        time ??= TimeProvider.System;
+        output.WriteLine("Press ENTER or Ctrl+C to stop. The overall deadline also stops incomplete workloads.");
+        try
+        {
+            await new ServiceBusPerformanceApp(settings, new Metrics(time), output, time, factory).Run(token).ConfigureAwait(false);
+            output.WriteLine("Complete");
+            return 0;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        { error.WriteLine("Stopped before completion."); return 130; }
+        catch (TimeoutException)
+        { error.WriteLine("Run or cleanup deadline exceeded; results are incomplete."); return 1; }
+        catch (Exception ex)
+        {
+            error.WriteLine(ex is ServiceBusException sb
+                ? $"Service Bus failed: {sb.Reason}. Results are incomplete."
+                : $"Run failed: {ex.GetType().Name}. Results are incomplete.");
+            return 1;
         }
     }
 }

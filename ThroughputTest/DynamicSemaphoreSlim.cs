@@ -1,67 +1,54 @@
-﻿//---------------------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation. All rights reserved.  
-//
-// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES 
-// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
-//---------------------------------------------------------------------------------
+namespace ThroughputTest;
 
-namespace ThroughputTest
+sealed class DynamicSemaphoreSlim : IDisposable
 {
-    using System;
-    using System.Threading;
-    using System.Threading.Tasks;
-    public class DynamicSemaphoreSlim : SemaphoreSlim
+    private readonly object sync = new();
+    private readonly Observable<int> setting;
+    private TaskCompletionSource changed = NewSignal();
+    private int limit;
+    private int inUse;
+
+    public DynamicSemaphoreSlim(Observable<int> setting)
     {
-        const int overallocationCount = 10000;
-        long remainingOverallocation;
-        public DynamicSemaphoreSlim(int initialCount) : base(initialCount + overallocationCount)
-        {
-            remainingOverallocation = overallocationCount;
-            // grab the overallocatedCounts
-            for (int i = 0; i < overallocationCount; i++)
-            {
-                this.Wait();
-            }
-        }
-
-        /// <summary>
-        /// Grant one more count
-        /// </summary>
-        public void Grant()
-        {
-            if (Interlocked.Decrement(ref remainingOverallocation) < 0)
-            {
-                throw new InvalidOperationException();
-            }
-            this.Release();
-        }
-
-        /// <summary>
-        /// Revoke a count once possible
-        /// </summary>
-        /// <returns>Task that completes when revocation is complete</returns>
-        public Task RevokeAsync()
-        {
-            if (Interlocked.Increment(ref remainingOverallocation) > overallocationCount)
-            {
-                throw new InvalidOperationException();
-            }
-            return this.WaitAsync();
-        }
-        
-        /// <summary>
-        /// Revoke a count once possible (does not block)
-        /// </summary>
-        public void Revoke()
-        {
-            if (Interlocked.Increment(ref remainingOverallocation) > overallocationCount)
-            {
-                throw new InvalidOperationException();
-            }
-            this.WaitAsync().ContinueWith((t)=> { }); // don't await
-        }
-
-        
+        this.setting = setting;
+        setting.Changed += Resize;
+        Resize(setting.Value);
     }
+
+    public int InUse { get { lock (sync) return inUse; } }
+    private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private void Pulse() { var previous = changed; changed = NewSignal(); previous.TrySetResult(); }
+
+    private void Resize(int value)
+    {
+        if (value < 1 || value > 10000) throw new ArgumentOutOfRangeException(nameof(value));
+        lock (sync) { limit = value; Pulse(); }
+    }
+
+    public async Task WaitAsync(CancellationToken token)
+    {
+        while (true)
+        {
+            Task wait;
+            lock (sync)
+            {
+                token.ThrowIfCancellationRequested();
+                if (inUse < limit) { inUse++; return; }
+                wait = changed.Task;
+            }
+            await wait.WaitAsync(token).ConfigureAwait(false);
+        }
+    }
+
+    public void Release()
+    {
+        lock (sync)
+        {
+            if (inUse == 0) throw new SemaphoreFullException();
+            inUse--;
+            Pulse();
+        }
+    }
+
+    public void Dispose() => setting.Changed -= Resize;
 }

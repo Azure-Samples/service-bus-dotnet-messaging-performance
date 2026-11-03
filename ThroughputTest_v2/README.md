@@ -1,145 +1,147 @@
-# Azure Service Bus Throughput Performance Test
+# Continuous Service Bus throughput test and hosting libraries
 
-In the v2 version, we have simplified and done some refactoring of the original console app. The gut of the app is still exactly same as before.
-We now have two common libraries that the console app depends on. This allows the core libraries to be hosted not only in console (as in the v2 version in the repo) but also
-in containerized environments such as Service Fabric for automated scaling and generating/simulating higher throughput/load scenarios
-(without the need of having to spin up vms manually). 
+v2 preserves the continuous workload and reusable `Sender`, `Receiver` and `ILogger`
+API. The console and both hosting libraries target **.NET 10**; the messaging
+library uses Azure.Messaging.ServiceBus 7.21.0 and Azure.Identity 1.21.0.
+Windows and Linux publishing are supported. For finite message-count runs, multiple
+receive paths, forwarding with separate send/receive paths, simulated receive work,
+or dynamic concurrency experiments, use [ThroughputTest](../ThroughputTest).
 
-The console app now also prints out P99 metric which depending on the scenario is sometimes more important than average. 
+## Build
 
-This version is tailored more for windows and azure containerized environments so if you wish to use it on Linux, v1 is still a better option.
+From the repository root with a .NET 10 SDK (verified with 10.0.401):
 
-## Building the Tool
-
-The tool is a .NET framework project that can produce standalone executable for Windows. 
-
-To build, use MSBUILD to run following commands:
-
+```powershell
+dotnet build .\ThroughputTest_v2\ServiceBusThroughputTest\ServiceBusThroughputTest.sln -c Release
+dotnet test .\ThroughputTest.V2.Tests\ThroughputTest.V2.Tests.csproj -c Release
+dotnet publish .\ThroughputTest_v2\ServiceBusThroughputTest\ServiceBusThroughputTest.csproj -c Release -r win-x64 --self-contained true
+dotnet publish .\ThroughputTest_v2\ServiceBusThroughputTest\ServiceBusThroughputTest.csproj -c Release -r linux-x64 --self-contained true
 ```
-    MSBUILD <path_to_the_solution> /t:restore
-	MSBUILD <path_to_the_solution>\ServiceBusThroughputTest.sln /property:Configuration=Release
-```
-The output application can be found in the ```ThroughpurTest_v2\ServiceBusThroughputTest\bin\Release```subdirectory.
 
-## Running the Tool
+Output is under `ThroughputTest_v2\ServiceBusThroughputTest/bin/Release/net10.0/<rid>/publish`.
+Use native path separators on your host. The old .NET Framework startup configuration
+is no longer used. `App.config` retains the two latency-sampling capacities and is
+copied to build/publish output; malformed values fail before clients are created.
 
-You can run the tool locally from your own machine or you can run it from within an Azure VM.
+## Running safely
 
-The only required command line arguments are a connection string and a send path. If the connection string includes 
-an EntityPath property for a queue, the send path can be omitted. If the receive path is not given, the tool assumes
-the send path and the receive path to be the same, which is sufficient for queues. For topics, the subscription(s) must 
-be given with explicit receive path options.
+Real runs send/consume messages and may incur charges. Use authorized, isolated,
+pre-existing Service Bus Premium entities with no unrelated traffic. The sample
+does not create/delete resources, purge queues, assign roles or configure topology.
+Read the [authentication and safety guidance](../ThroughputTest/README.md#authentication-and-safety).
+`--namespace`/`SERVICEBUS_NAMESPACE` uses `DefaultAzureCredential`.
+`SERVICEBUS_CONNECTION_STRING` is supported; `-C` remains compatible but should not
+be used for secrets in scripts, launch profiles or shell history. Explicit namespace
+and connection-string arguments are mutually exclusive. Namespace environment
+configuration takes precedence over the connection-string environment variable.
 
-You can test any valid Service Bus topology with this tool, including Topics with subscriptions and chained 
-entities with auto-forward set up between them. Therefore, the send path and the receive path do not have to be 
-on the same entity. You can also receive from dead-letter queues. 
+Prefix these arguments with
+`dotnet run --project .\ThroughputTest_v2\ServiceBusThroughputTest --`.
+Only `--help` is offline; the other examples perform messaging.
 
-| Scenario                     | Arguments                                                                     |
-|------------------------------|-------------------------------------------------------------------------------|
-| Send to and receive from a queue |```ThroughputTest -C {connection-string} -S myQueueName ```          |
-| Send to a topic and receive from a subscription | ``` ThroughputTest -C {connection-string} -S myTopicName -R myTopicName/subscriptions/mySubName ``` |
-| Send a queue |```ThroughputTest -C {connection-string} -S myQueueName -r 0 ```          |
-| Receive from a queue |```ThroughputTest -C {connection-string} -S myQueueName -s 0 ```          |
+| Workload | Arguments |
+|---|---|
+| Queue send/receive | `-S queue --duration-seconds 60` |
+| Topic and one subscription | `-S topic:subscription --duration-seconds 60` |
+| Equivalent subscription path | `-S topic/subscriptions/subscription --duration-seconds 60` |
+| Sender only | `-S queue -r 0 --duration-seconds 60` |
+| Receiver only | `-S queue -s 0 --duration-seconds 60` |
+| Single-message operations | `-S queue -t 1 -v 1` |
+| Batch operations and pipelines | `-S queue -t 25 -v 25 -i 4 -j 3 -d 0` |
+| ReceiveAndDelete | `-S queue -m false` |
+| PeekLock | `-S queue -m true` |
+| Dead-letter receiver | `-S 'queue/$DeadLetterQueue' -s 0` |
+| Subscription dead-letter receiver | `-S 'topic/subscriptions/one/$DeadLetterQueue' -s 0` |
 
-## Output
+For a topic/subscription path, sends go to the topic and receives use the SDK
+topic/subscription overload. An EntityPath connection string can supply the queue
+when `-S` is omitted. v2 has one entity argument, not the finite sample's `-S/-R`
+split or multiple-subscription CLI. Run separate v2 processes for independent
+destinations; use the finite tool for its explicit topology scenarios.
 
-The tool prints out interleaved statistics for sends and receives. Send information is prefixed with S (and in yellow),
-receive information is prefixed with R and printed in cyan. The columns are separated with the pipe symbol and therefore
-parseable. 
+## CLI and lifetime
 
-### Send output columns
+The original v2 short/long options are preserved (they differ from the finite tool):
 
-| Column   | Description
-|----------|---------------------------------------------------------------------------
-| pstart   | Begin of the data recording for this row (seconds from start of run)
-| pend     | End of data recording for this row
-| sbc      | Send batch count
-| mifs     | Max inflight sends
-| snd.avg  | Average send duration (to acknowledgement receipt) in milliseconds
-| snd.med  | Median send duration
-| snd.dev  | Standard deviation for send duration
-| snd.min  | Minimum send duration
-| snd.max  | Maximum send duration
-| gld.avg  | Average gate lock duration in milliseconds. This measure tracks whether the internal async thread pool queue gets backed up. If this value shoots up, you should reduce the number of concurrent inflight sends, because the application sends more than what can be put on the wire. 
-| gld.med  | Median gate lock duration
-| gld.dev  | Standard deviation for gate lock duration
-| gld.min  | Minimum gate lock duration
-| gld.max  | Maximum gate lock duration
-| msg/s    | Throughput in messages per second 
-| total    | Total messages sent in this period
-| sndop    | Total send operations in this period 
-| errs     | Errors
-| busy     | Busy errors
-| overall  | Total messages sent in this run
+| Option | Actual default / meaning |
+|---|---|
+| `-C, --connection-string` | Optional SAS string; prefer environment/namespace |
+| `--namespace` | Fully qualified namespace, no scheme |
+| `-S, --entity-path` | Queue, topic:subscription, or subscription path |
+| `-b, --payload-size-bytes` | 1024 bytes; 1..104857600, subject to service limits |
+| `-f, --frequency-metrics` | 10 seconds; 1..3600 |
+| `-m, --receive-mode` | `true` = PeekLock; `false` = ReceiveAndDelete |
+| `-r, --receiver-count` | 5; zero disables receivers |
+| `-s, --sender-count` | 1; zero disables senders |
+| `-p, --prefetch-count` | 100 per receiver |
+| `-t, --send-batch-size` | 1; 0/1 singles, >1 batches |
+| `-v, --receive-batch-size` | 1; 0/1 singles, >1 batches |
+| `-d, --send-callIntervalMs` | 1000 ms minimum start-to-start interval per pipeline, including send time |
+| `-e, --receive-callIntervalMs` | 5000 ms receive wait; 1..3600000 |
+| `-i, --inflight-sends` | 1 operation per sender |
+| `-j, --inflight-receives` | 1 operation per receiver |
+| `--duration-seconds` | 300 total; 1..86400 |
+| `--experiment` | None, Receiver, Sender, LargeMessageIntervals |
 
-### Receive output columns 
+Numeric values are validated before client construction. Counts, batch sizes,
+prefetch and concurrency use the same upper bounds as the finite tool. At least
+one side must be enabled. SDK byte limits split oversized batches and actual
+message/operation counts are recorded. A message too large for a batch fails.
+Pass `-m false` or `--receive-mode=false` to select ReceiveAndDelete. Omitting the
+option or using the bare flag keeps PeekLock. Invalid values fail before clients
+are created.
 
-| Column   | Description
-|----------|---------------------------------------------------------------------------
-| pstart   | Begin of the data recording for this row (seconds from start of run)
-| pend     | End of data recording for this row
-| rbc      | Receive batch count
-| mifr     | Max inflight receives
-| rcv.avg  | Average receive duration (to message receipt) in milliseconds
-| rcv.med  | Median receive duration
-| rcv.dev  | Standard deviation for receive duration
-| rcv.min  | Minimum receive duration
-| rcv.max  | Maximum receive duration
-| cpl.avg  | Average completion duration in milliseconds. 
-| cpl.med  | Median completion duration
-| cpl.dev  | Standard deviation for completion duration
-| cpl.min  | Minimum completion duration
-| cpl.max  | Maximum completion duration
-| msg/s    | Throughput in messages per second 
-| total    | Total messages received in this period
-| rcvop    | Total receive operations in this period 
-| errs     | Errors
-| busy     | Busy errors
-| overall  | Total messages sent in this run
+The continuous workload stops after the configured duration, or earlier on
+ENTER/Ctrl+C or a failure. All operations (including settlements) are awaited
+before clients are closed. Each resource close is bounded to 10 seconds.
+ReceiveAndDelete never settles. PeekLock batch receives use awaited individual
+completions; there is no bulk-completion API in the modern SDK. No automatic lock
+renewal is enabled. Prefetch/work must fit within the entity lock duration.
 
+Exit codes: **0** help or duration/experiment completion; **2** invalid CLI/config;
+**130** user cancellation; **1** operation, output or cleanup failure.
+Libraries propagate failure/cancellation rather than swallowing it. Their existing
+constructors and `Run(CancellationToken)` methods remain; hosts must provide
+cancellation and await `Run`. They own and close their clients, **not the caller's
+logger**. Dispose a shared logger only after all runs using it have drained.
+Passing an empty connection string permits documented environment authentication.
+No new deployment or Service Fabric configuration is supplied.
 
-## Options 
+## Metrics and optional experiments
 
-When only called with a connection string and send/receive paths, the tool will concurrently send and receive messages 
-to/from the chosen Service Bus entity.
+S/R pipe-delimited columns retain period bounds, batch/in-flight values,
+duration average/minimum/maximum/P99, throughput, interval message/operation totals,
+errors, busy errors and overall totals. R rows also show completion duration.
+Times are milliseconds; P99 uses linear interpolation. Completion time is the
+duration of the receive operation's whole awaited settlement group, not per-message
+latency. Busy errors are a subset of errors; empty polls are operations, not messages.
+Receipt counts include messages whose later settlement fails.
 
-If you just want to send messages, set the receiver count to zero with **-r 0**. If you only want to receive messages,
-set the sender count to zero with **-s 0**. 
+`MetricsSamplesPerDisplayIntervalSender` (2000) and
+`MetricsSamplesPerDisplayIntervalReceiver` (10000) limit latency samples using
+reservoir sampling. **They no longer limit counters:** message/operation/error totals
+include every finished operation even when its latency sample is not retained.
+Window rates use actual elapsed time and final partial windows are flushed.
+`MetricsDisplayEventArgs` retains its sample arrays and adds exact window counters
+and elapsed bounds; consumers must not sum sampled messages as overall totals.
+The display loop's `Completion` task exposes output-handler failures to hosts.
 
-The biggest throughput boosts yield the enabling of send and receive batching, meaning the sending and receiving of 
-several messages in one operation. This oprtion will maximize throughput and show you the practical limits, but you
-should always keep an eye on whether batching is a practical approach for your specific solution.
+The former private, disabled test methods are now selectable and bounded:
 
-The "inflight-sends" and "inflight-receives" options also have very significant throughput impact. "inflight-sends"
-tracks how many messages are being sent asynchronously and in a pipelined fashion while waiting for the operations 
-to complete. The "inflight-receives" option controls how many messages are being received and processed concurrently. 
+| Experiment | Preserved workload |
+|---|---|
+| Receiver | 1 receiver, prefetch 10240, batch 10, inflight 1024, wait 60000 ms, PeekLock, up to 120 seconds |
+| Sender | 1 sender, payload 600 bytes, batch 25, inflight 1, interval 8 ms, up to 300 seconds |
+| LargeMessageIntervals | 1 sender, payload 25 KiB, batch 25, inflight 1; intervals 256,128,64,32,16,8,4,2,1 ms, up to 300 seconds each |
 
-The further options are listed below:
+The old variable called `batchSize` was passed to `callIntervalMS`; the large-message
+experiment therefore preserves the actual **interval sweep**, not a newly invented
+batch sweep. The global `--duration-seconds` bounds all steps; allow at least 2700
+seconds for the full nine-step experiment. Shorter durations intentionally stop it
+early. No embedded namespace/key placeholders or unbounded experiment waits remain.
+Each optional experiment step starts new metric headers, a new time origin and
+its own overall counters, so measurements from different settings are not mixed.
 
-| Parameter                     | Description                                                                   
-|-------------------------------|-------------------------------------------------------------------------------
-|  **-C, --connection-string**  |  **Required**. Connection string                                              
-|  -S, --send-path              |  Send path. Queue or topic name, unless set in connection string EntityPath.  
-|  -R, --receive-paths          |  Receive paths. Mandatory for receiving from topic subscriptions. Must be {topic}/subscriptions/{subscription-name} or {queue-name}
-|  -n, --number-of-messages     |  Number of messages to send (default 1000000)
-|  -b, --message-size-bytes     |  Bytes per message (default 1024)
-|  -f, --frequency-metrics      |  Frequency of metrics display (seconds, default 10s)
-|  -m, --receive-mode           |  Receive mode.'PeekLock' (default) or 'ReceiveAndDelete'
-|  -r, --receiver-count         |  Number of concurrent receivers (default 1)
-|  -e, --prefetch-count         |  Prefetch count (default 0)
-|  -t, --send-batch-count       |  Number of messages per batch (default 0, no batching)
-|  -s, --sender-count           |  Number of concurrent senders (default 1)
-|  -d, --send-delay             |  Delay between sends of any sender (milliseconds, default 0)
-|  -i, --inflight-sends         |  Maximum numbers of concurrent in-flight send operations (default 1)
-|  -j, --inflight-receives      |  Maximum number of concurrent in-flight receive operations per receiver (default 1)
-| -v, --receive-batch-count     |  Max number of messages per batch (default 0, no batching)
-|  -w, --receive-work-duration  |  Work simulation delay between receive and completion (milliseconds, default 0, no work)
-
-
- 
-
-
-
-
-
-
+Offline tests use fake SDK clients, real library entry points and virtual time.
+They do not demonstrate real throughput, broker routing, credentials, deployment,
+Linux execution or completion of an independent review.

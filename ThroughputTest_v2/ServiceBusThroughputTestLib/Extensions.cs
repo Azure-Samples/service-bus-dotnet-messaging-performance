@@ -1,54 +1,23 @@
-﻿//---------------------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation. All rights reserved.  
-//
-// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES 
-// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
-//---------------------------------------------------------------------------------
+using Azure.Identity;
+using Azure.Messaging.ServiceBus;
+using ServiceBusThroughputTest.Common;
+using ThroughputTest;
 
-namespace ServiceBusThroughputTestLib.Extensions
+namespace ServiceBusThroughputTestLib.Extensions;
+
+static class Extensions
 {
-    using Azure.Messaging.ServiceBus;
-    using ServiceBusThroughputTest.Common;
-    using System;
-    using System.Threading;
+    internal static ServiceBusClient CreateClient(Settings settings) =>
+        !string.IsNullOrWhiteSpace(settings.ConnectionString)
+            ? new ServiceBusClient(settings.ConnectionString)
+            : new ServiceBusClient(settings.FullyQualifiedNamespace, new DefaultAzureCredential());
 
-    static class Extensions
+    internal static void RecordFailure(Exception exception, ILogger? logger, Guid? session)
     {
-        public static void HandleExceptions(this AggregateException ex, ILogger logger, Guid? sessionId, CancellationToken cancellationToken)
-        {
-            // bool wait = false;
-
-            logger?.AddTrace(ex.InnerException.ToString());
-
-            ex.Handle((x) =>
-            {
-                if (sessionId != null)
-                {
-                    if ((x as ServiceBusException)?.Reason == ServiceBusFailureReason.ServiceBusy)
-                    {
-                        logger?.IncrementBusyErrorCount(sessionId.Value);
-                        if (!cancellationToken.IsCancellationRequested)
-                        {
-                            // wait = true;
-                        }
-                    }
-                    else
-                    {
-                        logger?.IncrementErrorCount(sessionId.Value);
-                    }
-                }
-
-                return true;
-            });
-
-            //if (wait)
-            //{
-            //    await Task.Delay(3000, cancellationToken).ConfigureAwait(false);
-            //}
-
-            if (sessionId != null)
-                logger?.DisposeSession(sessionId.Value);
-        }
+        logger?.AddTrace(exception is ServiceBusException sb ? $"Service Bus failed: {sb.Reason}" : $"Operation failed: {exception.GetType().Name}");
+        if (session is not { } id) return;
+        logger!.IncrementErrorCount(id);
+        if (exception is ServiceBusException { Reason: ServiceBusFailureReason.ServiceBusy })
+            logger.IncrementBusyErrorCount(id);
     }
 }

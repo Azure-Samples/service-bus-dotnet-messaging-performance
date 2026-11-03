@@ -1,102 +1,113 @@
-//---------------------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation. All rights reserved.  
-//
-// THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, 
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES 
-// OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE. 
-//---------------------------------------------------------------------------------
+namespace ThroughputTest;
 
-namespace ThroughputTest
+sealed class WorkBudget(long target)
 {
-    using System;
-    using System.Collections.Generic;
-    using System.Threading;
-    using System.Threading.Tasks;
+    private readonly object sync = new();
+    private long remaining = target;
+    private long reserved;
+    private TaskCompletionSource changed = NewSignal();
+    private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    static class TaskEx
+    public async Task<int> ReserveAsync(int maximum, CancellationToken token)
     {
-        public static Task ParallelForEachAsync<TSource>(this IEnumerable<TSource> source, Func<TSource, Task> action)
+        while (true)
         {
-            List<Task> tasks = new List<Task>();
-            foreach (TSource i in source)
+            Task wait;
+            lock (sync)
             {
-                tasks.Add(action(i));
+                token.ThrowIfCancellationRequested();
+                if (remaining > 0)
+                {
+                    var count = (int)Math.Min(remaining, maximum);
+                    remaining -= count;
+                    reserved += count;
+                    return count;
+                }
+                if (reserved == 0) return 0;
+                wait = changed.Task;
             }
-
-            return Task.WhenAll(tasks.ToArray());
+            await wait.WaitAsync(token).ConfigureAwait(false);
         }
+    }
 
-        public static Task ParallelForEachAsync<TSource>(this IEnumerable<TSource> source, Func<TSource, long, Task> action)
+    public void Finish(int requested, int actual)
+    {
+        if (actual < 0 || actual > requested) throw new InvalidOperationException("Invalid operation count.");
+        lock (sync)
         {
-            List<Task> tasks = new List<Task>();
-
-            long index = 0;
-            foreach (TSource i in source)
-            {
-                tasks.Add(action(i, index));
-                index++;
-            }
-
-            return Task.WhenAll(tasks.ToArray());
+            reserved -= requested;
+            remaining += requested - actual;
+            var previous = changed;
+            changed = NewSignal();
+            previous.TrySetResult();
         }
+    }
+}
 
-        public static void ForEach<TSource>(this IEnumerable<TSource> source, Action<TSource, long> action)
+static class TaskEx
+{
+    public static async Task WhenAllFailFast(IEnumerable<Func<CancellationToken, Task>> operations, CancellationToken token)
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var tasks = operations.Select(Run).ToArray();
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        async Task Run(Func<CancellationToken, Task> operation)
         {
-            long index = 0;
-            foreach (TSource i in source)
-            {
-                action(i, index);
-                index++;
-            }
+            try { await operation(stop.Token).ConfigureAwait(false); }
+            catch { stop.Cancel(); throw; }
         }
+    }
 
-        public static void Fork(this Task thisTask)
+    public static async Task RunOperationsAsync(WorkBudget budget, int batchSize, DynamicSemaphoreSlim gate,
+        Func<int, double, CancellationToken, Task<int>> action, TimeProvider time, CancellationToken token)
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var tasks = new List<Task>();
+        Exception? schedulingError = null;
+        try
         {
-            thisTask.ContinueWith(t => { });
-        }
-
-        public static void For(long start, long end, Action<long> action)
-        {
-            for (long i = start; i < end; i++)
+            while (true)
             {
-                action(i);
-            }
-        }
-
-        public static async Task ParallelForAsync(long start, long end, Func<long, Task> action)
-        {
-            List<Task> tasks = new List<Task>();
-
-            for (long i = start; i < end; i++)
-            {
-                tasks.Add(action(i));
-            }
-
-            await Task.WhenAll(tasks.ToArray()).ConfigureAwait(false);
-        }
-
-        public static async Task Delay(TimeSpan delay, CancellationToken cancellationToken)
-        {
-            try
-            {
-                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-            }
-            catch (TaskCanceledException)
-            {
-
+                // Observe completed operations before admitting more work; storage is bounded by concurrency.
+                for (var i = tasks.Count - 1; i >= 0; i--)
+                    if (tasks[i].IsCompleted) { await tasks[i].ConfigureAwait(false); tasks.RemoveAt(i); }
+                var started = time.GetTimestamp();
+                await gate.WaitAsync(stop.Token).ConfigureAwait(false);
+                int count;
+                try { count = await budget.ReserveAsync(batchSize, stop.Token).ConfigureAwait(false); }
+                catch { gate.Release(); throw; }
+                if (count == 0) { gate.Release(); break; }
+                tasks.Add(Run(count, time.GetElapsedTime(started).TotalMilliseconds));
             }
         }
+        catch (Exception ex) { schedulingError = ex; stop.Cancel(); }
+        try { await Task.WhenAll(tasks).ConfigureAwait(false); }
+        catch when (schedulingError is not null and not OperationCanceledException)
+        { System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(schedulingError).Throw(); throw; }
+        if (schedulingError != null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(schedulingError).Throw();
 
-        public static async Task IgnoreExceptionAsync(Func<Task> task)
+        async Task Run(int count, double gateMilliseconds)
         {
-            try
-            {
-                await task().ConfigureAwait(false);
-            }
-            catch
-            {
+            var actual = 0;
+            try { actual = await action(count, gateMilliseconds, stop.Token).ConfigureAwait(false); }
+            catch { stop.Cancel(); throw; }
+            finally { budget.Finish(count, actual); gate.Release(); }
+        }
+    }
 
-            }
+    public static async Task CloseAsync(Func<CancellationToken, Task> close, Settings settings, TimeProvider time)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(settings.CleanupTimeoutSeconds), time);
+        // SDK close honors cancellation; the outer wait also bounds a transport that fails to respond.
+        var task = close(timeout.Token);
+        try { await task.WaitAsync(timeout.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            _ = task.ContinueWith(t => Console.Error.WriteLine($"Late cleanup failure: {t.Exception!.GetBaseException().GetType().Name}"),
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            throw new TimeoutException("Resource cleanup exceeded its deadline.");
         }
     }
 }
