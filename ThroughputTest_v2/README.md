@@ -87,6 +87,9 @@ Numeric values are validated before client construction. Counts, batch sizes,
 prefetch and concurrency use the same upper bounds as the finite tool. At least
 one side must be enabled. SDK byte limits split oversized batches and actual
 message/operation counts are recorded. A message too large for a batch fails.
+Pass `-m false` or `--receive-mode=false` to select ReceiveAndDelete. Omitting the
+option or using the bare flag keeps PeekLock. Invalid values fail before clients
+are created.
 
 The continuous workload stops after the configured duration, or earlier on
 ENTER/Ctrl+C or a failure. All operations (including settlements) are awaited

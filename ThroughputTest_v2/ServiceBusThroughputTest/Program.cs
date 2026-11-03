@@ -168,7 +168,7 @@ sealed class Settings
     [Option('f', "frequency-metrics", HelpText = "Display interval seconds (default 10).")]
     public int MetricsDisplayFrequency { get; set; } = 10;
     [Option('m', "receive-mode", HelpText = "true for PeekLock (default), false for ReceiveAndDelete.")]
-    public bool IsPeekLock { get; set; } = true;
+    public string ReceiveMode { get; set; } = "true";
     [Option('r', "receiver-count", HelpText = "Receivers (default 5); zero sends only.")]
     public int ReceiverCount { get; set; } = 5;
     [Option('p', "prefetch-count", HelpText = "Prefetch per receiver (default 100).")]
@@ -196,13 +196,15 @@ sealed class Settings
     {
         if (DurationSeconds < 1 || DurationSeconds > 86400 || ReceiveCallIntervalMs < 1 || ReceiveCallIntervalMs > 3_600_000 || !Enum.IsDefined(Experiment))
             throw new ArgumentException("Invalid duration, receive wait or experiment.");
+        if (!bool.TryParse(ReceiveMode, out var isPeekLock))
+            throw new ArgumentException("Receive mode must be true or false.");
         var path = QueueName == null ? null : Receiver.NormalizePath(QueueName);
         var entity = path == null ? null : EntityAddress.Parse(path).Entity;
         var result = new ThroughputTest.Settings
         {
             ConnectionString = ConnectionString, FullyQualifiedNamespace = FullyQualifiedNamespace,
             SendPath = entity, ReceivePaths = path == null ? [] : [path], MessageSizeInBytes = PayloadSizeInBytes,
-            MetricsDisplayFrequency = MetricsDisplayFrequency, ReceiveMode = IsPeekLock ? ServiceBusReceiveMode.PeekLock : ServiceBusReceiveMode.ReceiveAndDelete,
+            MetricsDisplayFrequency = MetricsDisplayFrequency, ReceiveMode = isPeekLock ? ServiceBusReceiveMode.PeekLock : ServiceBusReceiveMode.ReceiveAndDelete,
             SenderCount = SenderCount, ReceiverCount = ReceiverCount, SendBatchCount = SendBatchSize, ReceiveBatchCount = ReceiveBatchSize,
             CfgMaxInflightSends = MaxInflightSends, CfgMaxInflightReceives = MaxInflightReceives, PrefetchCount = PrefetchCount, SendDelay = SendCallIntervalMs
         };
